@@ -1,0 +1,64 @@
+#game {
+    display: inline-flex;
+    flex-direction: column;
+}
+
+.tile {
+    height: 30px;
+    width: 30px;
+    outline: solid 1px;
+    background-size: contain;
+}
+
+.hidden {
+    background-color: gray;
+}
+
+.revealed {
+    background-color: white;
+}
+
+.row {
+    display: inline-flex;
+}
+
+.flagged {
+    background-image: url("static/flag.png");
+}
+
+.mine {
+    background-image: url("static/mine.png");
+    background-color: red;
+}
+
+.num_1 {
+    background-image: url("static/one.png");
+}
+
+.num_2 {
+    background-image: url("static/two.png");
+}
+
+.num_3 {
+    background-image: url("static/three.png");
+}
+
+.num_4 {
+    background-image: url("static/four.png");
+}
+
+.num_5 {
+    background-image: url("static/five.png");
+}
+
+.num_6 {
+    background-image: url("static/six.png");
+}
+
+.num_7 {
+    background-image: url("static/seven.png");
+}
+
+.num_8 {
+    background-image: url("static/eight.png");
+}

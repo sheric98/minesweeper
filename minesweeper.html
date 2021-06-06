@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>TypeScript Minesweeper</title>
+    <link rel="stylesheet" href="minesweeper.css">
+    <script src="minesweeper.js"></script>
+  </head>
+  <body>
+    <div id="game">
+    </div>
+  </body>
+  <script>
+    var webGame = new WebGame(document);
+
+    window.onload = () => {
+      webGame.genBoard();
+    }
+    
+  </script>
+</html>
