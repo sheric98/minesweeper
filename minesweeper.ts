@@ -789,19 +789,36 @@ class WebGame {
     }
 
     numToDigits(num: number): Digits {
-        var dig1: Digit;
+        var dig1: Digit, dig2: Digit, dig3: Digit, dig4: Digit;
+        let minNum = -999;
+        let maxNum = 9999;
 
-        if (num < 0) {
+        if (num <= minNum) {
             dig1 = "neg";
+            dig2 = 9;
+            dig3 = 9;
+            dig4 = 9;
+        }
+        else if (num >= maxNum) {
+            dig1 = 9;
+            dig2 = 9;
+            dig3 = 9;
+            dig4 = 9;
         }
         else {
-            dig1 = Math.floor(num / 1000) % 10;
+            if (num < 0) {
+                dig1 = "neg";
+            }
+            else {
+                dig1 = Math.floor(num / 1000) % 10;
+            }
+            let pos = Math.abs(num);
+    
+            dig2 = Math.floor(pos / 100) % 10;
+            dig3 = Math.floor(pos / 10) % 10;
+            dig4 = pos % 10;
         }
-        let pos = Math.abs(num);
-
-        let dig2 = Math.floor(pos / 100) % 10;
-        let dig3 = Math.floor(pos / 10) % 10;
-        let dig4 = pos % 10;
+        
         return [dig1, dig2, dig3, dig4];
     }
 
