@@ -1,6 +1,40 @@
+body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#container {
+    display: inline-block;
+}
+
 #game {
     display: inline-flex;
     flex-direction: column;
+}
+
+#topbar {
+    display: flex;
+    justify-content: space-between;
+    outline: solid 1px;
+}
+
+#restart {
+    width: 50px;
+    height: 50px;
+    outline: solid 1px;
+}
+
+.happy {
+    background-image: url("static/happy.png");
+}
+
+.normal {
+    background-image: url("static/normal.png");
+}
+
+.sad {
+    background-image: url("static/sad.png");
 }
 
 .tile {
@@ -29,6 +63,18 @@
 .mine {
     background-image: url("static/mine.png");
     background-color: red;
+}
+
+.digits {
+    width: 200px;
+    height: 50px;
+    display: inline-flex;
+    background-color: black;
+}
+
+.digit {
+    width: 50px;
+    height: 50px;
 }
 
 .num_1 {
@@ -61,4 +107,48 @@
 
 .num_8 {
     background-image: url("static/eight.png");
+}
+
+.dig_0 {
+    background-image: url("static/digit0.png")
+}
+
+.dig_1 {
+    background-image: url("static/digit1.png")
+}
+
+.dig_2 {
+    background-image: url("static/digit2.png")
+}
+
+.dig_3 {
+    background-image: url("static/digit3.png")
+}
+
+.dig_4 {
+    background-image: url("static/digit4.png")
+}
+
+.dig_5 {
+    background-image: url("static/digit5.png")
+}
+
+.dig_6 {
+    background-image: url("static/digit6.png")
+}
+
+.dig_7 {
+    background-image: url("static/digit7.png")
+}
+
+.dig_8 {
+    background-image: url("static/digit8.png")
+}
+
+.dig_9 {
+    background-image: url("static/digit9.png")
+}
+
+.dig_neg {
+    background-image: url("static/digitneg.png");
 }

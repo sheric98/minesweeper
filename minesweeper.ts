@@ -1,6 +1,8 @@
 type TileNum = number
 type Tile = "mine" | "empty" | TileNum
 type State = "hidden" | "flagged" | "displayed"
+type MineNum = bigint | number
+type GameState = -1 | 0 | 1
 
 class Square {
     state: State;
@@ -73,7 +75,9 @@ class Board {
     height: bigint;
     totMines: bigint;
     squares: Array<Array<Square>>;
-    over: boolean;
+    mines: Set<Square>;
+    unclearedSquares: bigint;
+    gameState: GameState;
 
     NEIGHS: TileIdx[] = [
         [1, 1], [1, 0], [1, -1],
@@ -81,27 +85,34 @@ class Board {
         [-1, 1], [-1, 0], [-1, -1]
     ];
 
+    static getNumMines(width: bigint, height: bigint, mines: MineNum): bigint {
+        if (typeof mines === "bigint") {
+            let minesCapped = Math.max(0,
+                Math.min(Number(height * width), Number(mines)));
+            return BigInt(minesCapped);
+        }
+        else {
+            let pct = Math.max(0, Math.min(1, mines));
+            return BigInt(
+                Math.round(Number(width) * Number(height) * pct));
+        }
+    }
+
     constructor(
         width: bigint,
         height: bigint,
         tileIdx: TileIdx,
-        mines: bigint | number = 99n
+        mines: MineNum = 99n
     ) {
         this.width = width;
         this.height = height;
-        if (typeof mines === "bigint") {
-            let minesCapped = Math.max(0,
-                Math.min(Number(height * width), Number(mines)));
-            this.totMines = BigInt(minesCapped);
-        }
-        else {
-            let pct = Math.max(0, Math.min(1, mines));
-            this.totMines = BigInt(
-                Math.round(Number(width) * Number(height) * pct));
-        }
+        this.totMines = Board.getNumMines(width, height, mines);
+        this.unclearedSquares = (height * width) - this.totMines;
 
-        this.squares = this.initSquares(tileIdx);
-        this.over = false;
+        let initPair = this.initSquares(tileIdx);
+        this.squares = initPair[0];
+        this.mines = initPair[1];
+        this.gameState = 0;
     }
 
     getSquare(tileIdx: TileIdx): Square {
@@ -154,7 +165,7 @@ class Board {
         }
     }
 
-    initSquares(tileIdx: TileIdx): Array<Array<Square>> {
+    initSquares(tileIdx: TileIdx): [Array<Array<Square>>, Set<Square>] {
         let nums = [...Array(Number(this.width * this.height)).keys()];
         function shuffle(array: any[]) {
             var currentIndex = array.length, temporaryValue, randomIndex;
@@ -190,11 +201,14 @@ class Board {
             squares.push(empty);
         }
 
+        var mines: Set<Square> = new Set();
+
         for (let tileIdx of mineSquares) {
             let x = tileIdx[0];
             let y = tileIdx[1];
 
             squares[y][x] = new Square(tileIdx, "mine");
+            mines.add(squares[y][x]);
         }
 
         var mineSet = new Set(mineSquares.map(pair => this.convert2d1d(pair)));
@@ -219,25 +233,28 @@ class Board {
             }
         }
 
-        return squares;
+        return [squares, mines];
     }
 
     revealSquare(square: Square): TileRet[] {
-        if (this.over) {
+        if (this.gameState !== 0) {
             return [];
         }
         square.reveal();
-        var ret: TileRet[] = [[square.idx, square.tile]]
+        var ret: TileRet[] = [[square.idx, square.tile]];
+        if (square.tile === "mine") {
+            this.gameState = -1;
+            return ret;
+        }
         if (square.tile === "empty") {
             for (let neigh of square.hidden) {
                 let neighRet = this.revealSquare(neigh);
                 ret = ret.concat(neighRet);
             }
-            return ret;
         }
-        else if (square.tile === "mine") {
-            this.over = true;
-            return ret;
+
+        if (--this.unclearedSquares === 0n) {
+            this.gameState = 1;
         }
         return ret;
     }
@@ -248,7 +265,7 @@ class Board {
     }
 
     flagSquare(tileIdx: TileIdx): TileIdx[] {
-        if (this.over) {
+        if (this.gameState !== 0) {
             return [];
         }
         let x = tileIdx[0], y = tileIdx[1];
@@ -260,7 +277,7 @@ class Board {
     }
 
     unflagSquare(tileIdx: TileIdx): TileIdx[] {
-        if (this.over) {
+        if (this.gameState !== 0) {
             return [];
         }
         let x = tileIdx[0], y = tileIdx[1];
@@ -272,7 +289,7 @@ class Board {
     }
 
     revealAround(tileIdx: TileIdx): SpaceRet {
-        if (this.over) {
+        if (this.gameState !== 0) {
             return defaultSpaceRet;
         }
         var square = this.getSquare(tileIdx);
@@ -299,6 +316,9 @@ class Board {
 type Id = string
 type Game = Board | null
 type Hover = TileIdx | null
+type Digit = "neg" | number
+type Digits = [Digit, Digit, Digit, Digit]
+type HTMLDigits = [HTMLElement, HTMLElement, HTMLElement, HTMLElement]
 
 class WebGame {
     doc: Document;
@@ -306,19 +326,49 @@ class WebGame {
     height: bigint;
     game: Game;
     hover: Hover;
-    container: Element;
+    container: HTMLElement;
+    face: HTMLElement;
+    mines: MineNum;
+    remainingMines: number;
+    timeSpent: number;
+    minesDigs: HTMLDigits;
+    timerDigs: HTMLDigits;
 
     constructor(
         doc: Document,
         width = 20n,
         height = 20n,
+        mines: MineNum = 99n,
     ) {
         this.doc = doc;
         this.width = width;
         this.height = height;
+        this.mines = mines;
         this.game = null;
         this.hover = null;
         this.container = this.doc.getElementById("game")!;
+        this.face = this.doc.getElementById("restart")!;
+        this.minesDigs = [
+            this.doc.getElementById("mines1")!,
+            this.doc.getElementById("mines2")!,
+            this.doc.getElementById("mines3")!,
+            this.doc.getElementById("mines4")!,
+        ]
+        this.timerDigs = [
+            this.doc.getElementById("timer1")!,
+            this.doc.getElementById("timer2")!,
+            this.doc.getElementById("timer3")!,
+            this.doc.getElementById("timer4")!,
+        ]
+
+        this.updateFace();
+        
+        this.remainingMines = Number(Board.getNumMines(this.width, this.height, this.mines));
+        this.timeSpent = 0;
+
+        this.resetDigs(this.remainingMines, this.minesDigs);
+        this.resetDigs(this.timeSpent, this.timerDigs);
+
         this.initGameSpace();
     }
 
@@ -332,8 +382,8 @@ class WebGame {
         });
         this.doc.addEventListener('keydown', e => {
             if (e.code === 'Space') {
+                e.preventDefault();
                 if (this.hover !== null) {
-                    console.log("Space");
                     this.spaceClick(this.hover);
                 }
             }
@@ -355,19 +405,38 @@ class WebGame {
                     let idx = pair[0], num = pair[1];
                     this.revealPair(idx, num);
                 }
+                this.checkFace();
             }
         }
     }
 
     emptyClick(tileIdx: TileIdx) {
         if (this.game === null) {
-            this.game = new Board(this.width, this.height, tileIdx);
+            this.game = new Board(this.width, this.height, tileIdx, this.mines);
+            setTimeout(() => this.timer(), 1000);
         }
         let retArr = this.game.revealIdx(tileIdx);
         for (let pair of retArr) {
             let idx = pair[0], num = pair[1];
             this.revealPair(idx, num);
         }
+        this.checkFace();
+    }
+
+    checkFace() {
+        if (this.game !== null && this.game.gameState !== 0) {
+            this.updateFace();
+        }
+    }
+
+    timer() {
+        if (this.game === null || this.game.gameState !== 0) {
+            return;
+        } 
+        let prevTime = this.timeSpent;
+        this.timeSpent += 1;
+        this.updateDigs(prevTime, this.timeSpent, this.timerDigs);
+        setTimeout(() => this.timer(), 1000);
     }
 
     revealPair(tileIdx: TileIdx, num: Tile) {
@@ -402,6 +471,11 @@ class WebGame {
                     this.unflag(tileIdx);
                 };
                 tile.classList.add("flagged");
+
+                // update mine count
+                let prevNum = this.remainingMines
+                this.remainingMines -= 1;
+                this.updateDigs(prevNum, this.remainingMines, this.minesDigs);
             }
         }
     }
@@ -422,6 +496,11 @@ class WebGame {
                     this.flag(tileIdx)
                 };
                 tile.classList.remove("flagged");
+
+                // update mine count
+                let prevNum = this.remainingMines
+                this.remainingMines += 1;
+                this.updateDigs(prevNum, this.remainingMines, this.minesDigs);
             }
         }
     }
@@ -431,8 +510,7 @@ class WebGame {
         return x.toString() + "_" + y.toString();
     }
 
-    genTile(tileIdx: TileIdx) {
-        let tile = this.doc.createElement('div');
+    defaultTileAttrs(tileIdx: TileIdx, tile: HTMLElement) {
         tile.classList.add("tile");
         tile.classList.add("hidden")
         tile.id = this.genId(tileIdx);
@@ -442,6 +520,11 @@ class WebGame {
         tile.oncontextmenu = () => {
             this.flag(tileIdx);
         };
+    }
+
+    genTile(tileIdx: TileIdx) {
+        let tile = this.doc.createElement('div');
+        this.defaultTileAttrs(tileIdx, tile);
         tile.addEventListener('mouseover', e => {
             this.hover = tileIdx;
         });
@@ -465,5 +548,111 @@ class WebGame {
             let row = this.genRow(j);
             board.appendChild(row);
         }
+    }
+
+    numToDigits(num: number): Digits {
+        var dig1: Digit;
+
+        if (num < 0) {
+            dig1 = "neg";
+        }
+        else {
+            dig1 = Math.floor(num / 1000) % 10;
+        }
+        let pos = Math.abs(num);
+
+        let dig2 = Math.floor(pos / 100) % 10;
+        let dig3 = Math.floor(pos / 10) % 10;
+        let dig4 = pos % 10;
+        return [dig1, dig2, dig3, dig4];
+    }
+
+    getDigClassName(dig: Digit): string {
+        var postPend: string;
+        if (dig === "neg") {
+            postPend = dig;
+        }
+        else {
+            postPend = dig.toString();
+        }
+        return "dig_" + postPend;
+    }
+
+    getDiffDigs(digs1: Digits, digs2: Digits): [boolean, boolean, boolean, boolean] {
+        return [
+            digs1[0] !== digs2[0],
+            digs1[1] !== digs2[1],
+            digs1[2] !== digs2[2],
+            digs1[3] !== digs2[3],
+        ]
+    }
+
+    updateDigs(prevNum: number, newNum: number, digs: HTMLDigits) {
+        let prevDigs = this.numToDigits(prevNum);
+        let newDigs = this.numToDigits(newNum);
+
+        let diffs = this.getDiffDigs(prevDigs, newDigs);
+        for (let i = 0; i < diffs.length; i++) {
+            if (diffs[i]) {
+                digs[i].classList.remove(this.getDigClassName(prevDigs[i]));
+                digs[i].classList.add(this.getDigClassName(newDigs[i]));
+            }
+        }
+    }
+
+    updateFace() {
+        if (this.game === null || this.game.gameState === 0) {
+            this.face.className = "normal";
+        }
+        else if (this.game.gameState === 1) {
+            this.face.className = "happy";
+        }
+        else {
+            this.face.className = "sad";
+        }
+    }
+
+    resetDigs(num: number, htmlDigs: HTMLDigits) {
+        let digs = this.numToDigits(num);
+
+        for (let i = 0; i < htmlDigs.length; i++) {
+            htmlDigs[i].className = 'digit';
+            htmlDigs[i].classList.add(this.getDigClassName(digs[i]));
+        }
+    }
+
+    resetCounters() {
+        this.remainingMines = Number(
+            Board.getNumMines(this.width, this.height, this.mines));
+        this.timeSpent = 0;
+
+        this.resetDigs(this.remainingMines, this.minesDigs);
+        this.resetDigs(this.timeSpent, this.timerDigs);
+    }
+
+    resetTile(tileIdx: TileIdx) {
+        let id = this.genId(tileIdx)
+        let tile = this.doc.getElementById(id)!;
+
+        // reset classes
+        tile.className = '';
+
+        this.defaultTileAttrs(tileIdx, tile);
+    }
+
+    resetBoard() {
+        for (let j = 0; j < this.height; j++) {
+            for (let i = 0; i < this.width; i++) {
+                let tileIdx: TileIdx = [i, j];
+                this.resetTile(tileIdx);
+            }
+        }
+    }
+
+    resetGame() {
+        this.game = null;
+        this.resetBoard();
+        this.resetCounters();
+        this.updateFace();
     }
 }
