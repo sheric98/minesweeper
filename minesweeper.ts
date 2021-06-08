@@ -70,16 +70,30 @@ type SpaceReveal = "flag" | "unflag" | "reveal"
 type SpaceRet = [SpaceReveal, TileRet[]]
 var defaultSpaceRet: SpaceRet = ["reveal", []]
 
+function setDiff<T>(A: Set<T>, B: Set<T>): Set<T> {
+    let ret: Set<T> = new Set();
+
+    for (let a of A) {
+        if (!B.has(a)) {
+            ret.add(a);
+        }
+    }
+
+    return ret;
+}
+
+
 class Board {
     width: bigint;
     height: bigint;
     totMines: bigint;
     squares: Array<Array<Square>>;
     mines: Set<Square>;
+    flags: Set<Square>;
     unclearedSquares: bigint;
     gameState: GameState;
 
-    NEIGHS: TileIdx[] = [
+    static NEIGHS: TileIdx[] = [
         [1, 1], [1, 0], [1, -1],
         [0, 1], [0, -1],
         [-1, 1], [-1, 0], [-1, -1]
@@ -112,6 +126,7 @@ class Board {
         let initPair = this.initSquares(tileIdx);
         this.squares = initPair[0];
         this.mines = initPair[1];
+        this.flags = new Set();
         this.gameState = 0;
     }
 
@@ -120,32 +135,32 @@ class Board {
         return this.squares[y][x];
     }
 
-    convert1d2d(idx: number): TileIdx {
-        let x = idx % Number(this.width);
-        let y = Math.floor(idx / Number(this.width));
+    static convert1d2d(idx: number, width: bigint): TileIdx {
+        let x = idx % Number(width);
+        let y = Math.floor(idx / Number(width));
         return [x, y];
     }
 
-    convert2d1d(tileIdx: TileIdx): number {
+    static convert2d1d(tileIdx: TileIdx, width: bigint): number {
         let x = tileIdx[0], y = tileIdx[1];
-        return y * Number(this.width) + x;
+        return y * Number(width) + x;
     }
 
-    getNeighbors(tileIdx: TileIdx): TileIdx[] {
+    static getNeighbors(tileIdx: TileIdx, width: bigint, height: bigint): TileIdx[] {
         let x = tileIdx[0], y = tileIdx[1];
-        let ret = this.NEIGHS.map((pair) => {
+        let ret = Board.NEIGHS.map((pair) => {
             let neigh: TileIdx = [pair[0] + x, pair[1] + y];
             return neigh
-        }).filter(pair => pair[0] >= 0 && pair[0] < this.width
-            && pair[1] >= 0 && pair[1] < this.height);
+        }).filter(pair => pair[0] >= 0 && pair[0] < width
+            && pair[1] >= 0 && pair[1] < height);
 
         return ret;
     }
 
     countAdjacent(tileIdx: TileIdx, mineSquares: Set<number>)
         : Tile {
-        let neighs = this.getNeighbors(tileIdx)
-            .filter(x => mineSquares.has(this.convert2d1d(x)));
+        let neighs = Board.getNeighbors(tileIdx, this.width, this.height)
+            .filter(x => mineSquares.has(Board.convert2d1d(x, this.width)));
         if (neighs.length == 0) {
             return "empty";
         }
@@ -186,14 +201,14 @@ class Board {
             return array;
         }
         let randomized: number[] = shuffle(nums);
-        let neighbor1d = this.getNeighbors(tileIdx)
-            .map(idx => this.convert2d1d(idx));
+        let neighbor1d = Board.getNeighbors(tileIdx, this.width, this.height)
+            .map(idx => Board.convert2d1d(idx, this.width));
         let safeSquares = new Set(neighbor1d);
-        safeSquares.add(this.convert2d1d(tileIdx));
+        safeSquares.add(Board.convert2d1d(tileIdx, this.width));
         let potentialMines = randomized.filter(x => !safeSquares.has(x));
 
         var mineSquares = potentialMines.slice(0, Number(this.totMines))
-            .map(idx => this.convert1d2d(idx));
+            .map(idx => Board.convert1d2d(idx, this.width));
 
         var squares: Square[][] = new Array();
         for (let i=0; i < this.height; i++) {
@@ -211,12 +226,12 @@ class Board {
             mines.add(squares[y][x]);
         }
 
-        var mineSet = new Set(mineSquares.map(pair => this.convert2d1d(pair)));
+        var mineSet = new Set(mineSquares.map(pair => Board.convert2d1d(pair, this.width)));
 
         for (let j = 0; j < this.height; j++) {
             for (let i = 0; i < this.width; i++) {
                 let idx: TileIdx = [i, j];
-                if (mineSet.has(this.convert2d1d(idx))) {
+                if (mineSet.has(Board.convert2d1d(idx, this.width))) {
                     continue;
                 }
                 let numMines = this.countAdjacent(idx, mineSet);
@@ -227,7 +242,7 @@ class Board {
         for (let j = 0; j < this.height; j++) {
             for (let i = 0; i < this.width; i++) {
                 let idx: TileIdx = [i, j]
-                let neighs = this.getNeighbors(idx)
+                let neighs = Board.getNeighbors(idx, this.width, this.height)
                     .map(pair => squares[pair[1]][pair[0]]);
                 squares[j][i].add_hiddens(neighs);
             }
@@ -268,9 +283,10 @@ class Board {
         if (this.gameState !== 0) {
             return [];
         }
-        let x = tileIdx[0], y = tileIdx[1];
-        if (this.squares[y][x].state === "hidden") {
-            this.squares[y][x].flag();
+        var square = this.getSquare(tileIdx);
+        if (square.state === "hidden") {
+            square.flag();
+            this.flags.add(square);
             return [tileIdx];
         }
         return [];
@@ -280,24 +296,35 @@ class Board {
         if (this.gameState !== 0) {
             return [];
         }
-        let x = tileIdx[0], y = tileIdx[1];
-        if (this.squares[y][x].state === "flagged") {
-            this.squares[y][x].unflag();
+        var square = this.getSquare(tileIdx);
+        if (square.state === "flagged") {
+            square.unflag();
+            this.flags.delete(square);
             return [tileIdx];
         }
         return [];
     }
 
-    revealAround(tileIdx: TileIdx): SpaceRet {
+    revealAround(tileIdx: TileIdx, flag: boolean): SpaceRet {
         if (this.gameState !== 0) {
             return defaultSpaceRet;
         }
         var square = this.getSquare(tileIdx);
         if (square.state === "hidden") {
-            return ["flag", []];
+            if (flag) {
+                return ["flag", []];
+            }
+            else {
+                return defaultSpaceRet;
+            }
         }
         else if (square.state === "flagged") {
-            return ["unflag", []];
+            if (flag) {
+                return ["unflag", []];
+            }
+            else {
+                return defaultSpaceRet;
+            }
         }
         else if (this.correctFlagged(tileIdx)) {
             let ret: TileRet[] = new Array();
@@ -309,6 +336,14 @@ class Board {
         else {
             return defaultSpaceRet;
         }
+    }
+
+    // return pair of [incorrect flag, missing flag] squares
+    getResults(): [Set<Square>, Set<Square>] {
+        let incorrect = setDiff(this.flags, this.mines);
+        let missing = setDiff(this.mines, this.flags);
+
+        return [incorrect, missing];
     }
 }
 
@@ -333,6 +368,9 @@ class WebGame {
     timeSpent: number;
     minesDigs: HTMLDigits;
     timerDigs: HTMLDigits;
+    left: boolean;
+    right: boolean;
+    currHover: Set<number>;
 
     constructor(
         doc: Document,
@@ -369,6 +407,11 @@ class WebGame {
         this.resetDigs(this.remainingMines, this.minesDigs);
         this.resetDigs(this.timeSpent, this.timerDigs);
 
+        this.left = false;
+        this.right = false;
+
+        this.currHover = new Set();
+
         this.initGameSpace();
     }
 
@@ -384,15 +427,103 @@ class WebGame {
             if (e.code === 'Space') {
                 e.preventDefault();
                 if (this.hover !== null) {
-                    this.spaceClick(this.hover);
+                    this.spaceClick(this.hover, true);
                 }
             }
-        })
+        });
+        this.doc.addEventListener('mousedown', e => {
+            switch (e.button) {
+                case 0:
+                    this.left = true;
+                    break;
+                case 2:
+                    this.right = true;
+                    break;
+            }
+        });
+        this.doc.addEventListener('mouseup', e => {
+            switch (e.button) {
+                case 0:
+                    this.unHoverAll();
+                    if (this.left && this.right) {
+                        this.revealDoubleClick();
+                    }
+                    else if (this.left) {
+                        this.revealSingleClick();
+                    }
+                    this.left = false;
+                    break;
+                case 2:
+                    this.right = false;
+                    break;
+            }
+        });
     }
 
-    spaceClick(tileIdx: TileIdx) {
+    revealSingleClick() {
+        if (this.hover !== null) {
+            if (this.game === null ||
+                this.game.getSquare(this.hover).state === "hidden") {
+                this.emptyClick(this.hover);
+            }
+        }
+    }
+
+    revealDoubleClick() {
+        this.currHover.clear();
+        if (this.hover !== null) {
+            this.spaceClick(this.hover, false);
+        }
+    }
+
+    hoverTile(tileIdx: TileIdx) {
+        this.currHover.add(Board.convert2d1d(tileIdx, this.width));
+        let tile = this.getTile(tileIdx);
+        if (this.game === null ||
+                this.game.getSquare(tileIdx).state === "hidden") {
+            tile.classList.remove("hidden");
+            tile.classList.add("hover");
+        }
+    }
+
+    unhoverTile(tileIdx: TileIdx, remove: boolean) {
+        let tile = this.getTile(tileIdx);
+        if (tile.classList.contains("hover")) {
+            tile.classList.remove("hover");
+            tile.classList.add("hidden");
+        }
+        if (remove) {
+            this.currHover.delete(Board.convert2d1d(tileIdx, this.width));
+        }
+    }
+
+    unHoverAll() {
+        for (let num of this.currHover) {
+            let idx = Board.convert1d2d(num, this.width);
+            this.unhoverTile(idx, false);
+        }
+        this.currHover.clear();
+    }
+
+    hoverTiles(tileIdxs: TileIdx[]) {
+        let hovers = new Set(
+            tileIdxs.map(x => Board.convert2d1d(x, this.width)));
+        
+        let addHovers = setDiff(hovers, this.currHover);
+        let unHovers = setDiff(this.currHover, hovers);
+
+        for (let un of unHovers) {
+            this.unhoverTile(Board.convert1d2d(un, this.width), true);
+        }
+
+        for (let add of addHovers) {
+            this.hoverTile(Board.convert1d2d(add, this.width));
+        }
+    }
+
+    spaceClick(tileIdx: TileIdx, flag: boolean) {
         if (this.game !== null) {
-            let retPair = this.game.revealAround(tileIdx);
+            let retPair = this.game.revealAround(tileIdx, flag);
             let retType = retPair[0], retArr = retPair[1];
             if (retType === "flag") {
                 this.flag(tileIdx);
@@ -403,9 +534,12 @@ class WebGame {
             else {
                 for (let pair of retArr) {
                     let idx = pair[0], num = pair[1];
-                    this.revealPair(idx, num);
+                    if (this.revealPair(idx, num)) {
+                        break;
+                    }
                 }
                 this.checkFace();
+                this.checkWin();
             }
         }
     }
@@ -418,14 +552,23 @@ class WebGame {
         let retArr = this.game.revealIdx(tileIdx);
         for (let pair of retArr) {
             let idx = pair[0], num = pair[1];
-            this.revealPair(idx, num);
+            if (this.revealPair(idx, num)) {
+                break;
+            }
         }
         this.checkFace();
+        this.checkWin();
     }
 
     checkFace() {
         if (this.game !== null && this.game.gameState !== 0) {
             this.updateFace();
+        }
+    }
+
+    checkWin() {
+        if (this.game !== null && this.game.gameState === 1) {
+            this.revealWin();
         }
     }
 
@@ -439,21 +582,76 @@ class WebGame {
         setTimeout(() => this.timer(), 1000);
     }
 
-    revealPair(tileIdx: TileIdx, num: Tile) {
-        let id = this.genId(tileIdx);
-        let tile = this.doc.getElementById(id)!;
-        tile.onclick = null;
-        tile.oncontextmenu = null;
+    removeAttrs(tileIdx: TileIdx, tile: HTMLElement, reveal: boolean) {
+        tile.onmousedown = e => {
+            this.tileMouseDown(tileIdx, "displayed", e);
+        };
+        if (reveal) {
+            this.revealTile(tile);
+        }
+    }
+
+    revealTile(tile: HTMLElement) {
         tile.classList.remove("hidden");
         tile.classList.add("revealed");
+    }
+
+    // true if lost, false else
+    revealPair(tileIdx: TileIdx, num: Tile): boolean {
+        let tile = this.getTile(tileIdx);
+        this.removeAttrs(tileIdx, tile, true);
         if (num === "mine") {
+            tile.classList.add("lose");
             tile.classList.add("mine");
+            this.revealLose(tileIdx);
+            return true;
         }
         else if (num === "empty") {
-            return;
+            return false;
         }
         else {
             tile.classList.add("num_" + num.toString());
+            return false;
+        }
+    }
+
+    revealLose(tileIdx: TileIdx) {
+        if (this.game === null) {
+            return;
+        }
+
+        let results = this.game.getResults();
+        let incorrect = results[0];
+        let missing = results[1];
+        let loseSquare = this.game.getSquare(tileIdx);
+        missing.delete(loseSquare);
+
+        for (let inc of incorrect) {
+            let tile = this.getTile(inc.idx);
+            this.removeAttrs(tileIdx, tile, true);
+            tile.classList.remove("flagged");
+            tile.classList.add("no_mine");
+        }
+
+        for (let miss of missing) {
+            let tile = this.getTile(miss.idx);
+            this.removeAttrs(tileIdx, tile, true);
+            tile.classList.add("mine");
+        }
+    }
+
+    revealWin() {
+        if (this.game === null) {
+            return;
+        }
+
+        let results = this.game.getResults();
+        let missing = results[1];
+
+        for (let miss of missing) {
+            let tile = this.getTile(miss.idx);
+            this.removeAttrs(miss.idx, tile, false);
+            tile.classList.add("flagged");
         }
     }
 
@@ -464,11 +662,9 @@ class WebGame {
         else {
             let ret = this.game.flagSquare(tileIdx);
             for (let pair of ret) {
-                let id = this.genId(pair);
-                let tile = this.doc.getElementById(id)!;
-                tile.onclick = null;
-                tile.oncontextmenu = () => {
-                    this.unflag(tileIdx);
+                let tile = this.getTile(pair);
+                tile.onmousedown = e => {
+                    this.tileMouseDown(tileIdx, "flagged", e);
                 };
                 tile.classList.add("flagged");
 
@@ -487,13 +683,9 @@ class WebGame {
         else {
             let ret = this.game.unflagSquare(tileIdx);
             for (let pair of ret) {
-                let id = this.genId(pair);
-                let tile = this.doc.getElementById(id)!;
-                tile.onclick = () => {
-                    this.emptyClick(tileIdx)
-                };
-                tile.oncontextmenu = () => {
-                    this.flag(tileIdx)
+                let tile = this.getTile(pair);
+                tile.onmousedown = e => {
+                    this.tileMouseDown(tileIdx, "hidden", e);
                 };
                 tile.classList.remove("flagged");
 
@@ -510,27 +702,73 @@ class WebGame {
         return x.toString() + "_" + y.toString();
     }
 
+    getTile(tileIdx: TileIdx): HTMLElement {
+        let id = this.genId(tileIdx);
+        return this.doc.getElementById(id)!;
+    }
+
     defaultTileAttrs(tileIdx: TileIdx, tile: HTMLElement) {
         tile.classList.add("tile");
         tile.classList.add("hidden")
-        tile.id = this.genId(tileIdx);
-        tile.onclick = () => {
-            this.emptyClick(tileIdx);
+        tile.onmousedown = e => {
+            this.tileMouseDown(tileIdx, "hidden", e);
         };
-        tile.oncontextmenu = () => {
-            this.flag(tileIdx);
-        };
+        tile.onmouseover = () => {
+            this.hover = tileIdx;
+            if (this.left && this.right) {
+                this.hoverAround(tileIdx);
+            }
+            else if (this.left) {
+                this.hoverSingle(tileIdx);
+            }
+        }
+    }
+
+    tileMouseDown(tileIdx: TileIdx, state: State, e: MouseEvent) {
+        switch (e.button) {
+            case 0:
+                if (this.right) {
+                    this.hoverAround(tileIdx);
+                }
+                else {
+                    this.hoverSingle(tileIdx);
+                }
+                break;
+            case 2:
+                if (this.left) {
+                    this.hoverAround(tileIdx);
+                }
+                else {
+                    switch (state) {
+                        case "hidden":
+                            this.flag(tileIdx);
+                            break;
+                        case "displayed":
+                            break;
+                        case "flagged":
+                            this.unflag(tileIdx);
+                    }
+                }
+        }
+    }
+
+    hoverSingle(tileIdx: TileIdx) {
+        this.hoverTiles([tileIdx]);
+    }
+
+    hoverAround(tileIdx: TileIdx) {
+        let neighs = Board.getNeighbors(tileIdx, this.width, this.height);
+        neighs.push(tileIdx);
+        this.hoverTiles(neighs);
     }
 
     genTile(tileIdx: TileIdx) {
         let tile = this.doc.createElement('div');
+        tile.id = this.genId(tileIdx);
         this.defaultTileAttrs(tileIdx, tile);
-        tile.addEventListener('mouseover', e => {
-            this.hover = tileIdx;
-        });
         return tile;
     }
-    
+
     genRow(j: number) {
         let row = this.doc.createElement('div');
         row.classList.add("row");
@@ -631,8 +869,7 @@ class WebGame {
     }
 
     resetTile(tileIdx: TileIdx) {
-        let id = this.genId(tileIdx)
-        let tile = this.doc.getElementById(id)!;
+        let tile = this.getTile(tileIdx);
 
         // reset classes
         tile.className = '';

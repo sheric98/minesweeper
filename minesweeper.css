@@ -48,6 +48,10 @@ body {
     background-color: gray;
 }
 
+.hover {
+    background-color: lightgrey;
+}
+
 .revealed {
     background-color: white;
 }
@@ -60,9 +64,16 @@ body {
     background-image: url("static/flag.png");
 }
 
+.lose {
+    background-color: red;
+}
+
 .mine {
     background-image: url("static/mine.png");
-    background-color: red;
+}
+
+.no_mine {
+    background-image: url("static/no_mine.png");
 }
 
 .digits {
