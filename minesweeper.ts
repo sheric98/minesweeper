@@ -28,11 +28,13 @@ class Square {
         }
     }
 
-    flag() {
+    // returns if the flag is correct or not. For used in training mode
+    flag(): boolean {
         this.state = "flagged";
         for (let neigh of this.neighs) {
             neigh.add_flag(this);
         }
+        return this.tile === "mine";
     }
 
     unflag() {
@@ -67,8 +69,10 @@ class Square {
 type TileIdx = [number, number]
 type TileRet = [TileIdx, Tile]
 type SpaceReveal = "flag" | "unflag" | "reveal"
-type SpaceRet = [SpaceReveal, TileRet[]]
-var defaultSpaceRet: SpaceRet = ["reveal", []]
+// okay (in training), type of reveal, and tiles affected
+type SpaceRet = [boolean, SpaceReveal, TileRet[]]
+var defaultSpaceRet: SpaceRet = [true, "reveal", []]
+var loseSpaceRet: SpaceRet = [false, "reveal", []]
 
 function setDiff<T>(A: Set<T>, B: Set<T>): Set<T> {
     let ret: Set<T> = new Set();
@@ -92,6 +96,7 @@ class Board {
     flags: Set<Square>;
     unclearedSquares: bigint;
     gameState: GameState;
+    training: boolean;
 
     static NEIGHS: TileIdx[] = [
         [1, 1], [1, 0], [1, -1],
@@ -116,11 +121,13 @@ class Board {
         width: bigint,
         height: bigint,
         tileIdx: TileIdx,
-        mines: MineNum = 99n
+        mines: MineNum = 99n,
+        training: boolean,
     ) {
         this.width = width;
         this.height = height;
         this.totMines = Board.getNumMines(width, height, mines);
+        this.training = training;
         this.unclearedSquares = (height * width) - this.totMines;
 
         let initPair = this.initSquares(tileIdx);
@@ -252,7 +259,7 @@ class Board {
     }
 
     revealSquare(square: Square): TileRet[] {
-        if (this.gameState !== 0) {
+        if (this.gameState !== 0 || square.state == "displayed") {
             return [];
         }
         square.reveal();
@@ -279,17 +286,20 @@ class Board {
         return this.revealSquare(this.squares[y][x]);
     }
 
-    flagSquare(tileIdx: TileIdx): TileIdx[] {
+    flagSquare(tileIdx: TileIdx): [boolean, TileIdx[]] {
         if (this.gameState !== 0) {
-            return [];
+            return [true, []];
         }
         var square = this.getSquare(tileIdx);
         if (square.state === "hidden") {
-            square.flag();
+            let correctlyFlagged = square.flag();
             this.flags.add(square);
-            return [tileIdx];
+            if (!correctlyFlagged && this.training) {
+                this.gameState = -1;
+            }
+            return [correctlyFlagged, [tileIdx]];
         }
-        return [];
+        return [true, []];
     }
 
     unflagSquare(tileIdx: TileIdx): TileIdx[] {
@@ -300,6 +310,10 @@ class Board {
         if (square.state === "flagged") {
             square.unflag();
             this.flags.delete(square);
+            // no unflagging in training
+            if (this.training) {
+                this.gameState = -1;
+            }
             return [tileIdx];
         }
         return [];
@@ -312,7 +326,8 @@ class Board {
         var square = this.getSquare(tileIdx);
         if (square.state === "hidden") {
             if (flag) {
-                return ["flag", []];
+                // though default to true (no lose), could lose to incorrect flag later in checking.
+                return [true, "flag", []];
             }
             else {
                 return defaultSpaceRet;
@@ -320,7 +335,7 @@ class Board {
         }
         else if (square.state === "flagged") {
             if (flag) {
-                return ["unflag", []];
+                return [true, "unflag", []];
             }
             else {
                 return defaultSpaceRet;
@@ -331,10 +346,24 @@ class Board {
             for (let neigh of square.hidden) {
                 ret = ret.concat(this.revealSquare(neigh));
             }
-            return ["reveal", ret];
+            // in this case, clicked redundant square (with space). Lose in training.
+            if (ret.length == 0 && this.training && flag) {
+                this.gameState = -1;
+                return loseSpaceRet;
+            }
+            else {
+                return [true, "reveal", ret];
+            }
         }
         else {
-            return defaultSpaceRet;
+            // in this case, we miss clicked. In training mode - we lose. Only lose on space rather than double click.
+            if (this.training && flag) {
+                this.gameState = -1;
+                return loseSpaceRet;
+            }
+            else {
+                return defaultSpaceRet;
+            }
         }
     }
 
@@ -371,17 +400,17 @@ class WebGame {
     left: boolean;
     right: boolean;
     currHover: Set<number>;
+    training: boolean;
+    timerCallback: null | number;
 
     constructor(
         doc: Document,
-        width = 20n,
-        height = 20n,
-        mines: MineNum = 99n,
     ) {
         this.doc = doc;
-        this.width = width;
-        this.height = height;
-        this.mines = mines;
+        this.width = BigInt((<HTMLInputElement>doc.getElementById('width')!).value);
+        this.height = BigInt((<HTMLInputElement>doc.getElementById('height')!).value);
+        this.mines = BigInt((<HTMLInputElement>doc.getElementById('mines')!).value);
+        this.training = this.getTrainingMode();
         this.game = null;
         this.hover = null;
         this.container = this.doc.getElementById("game")!;
@@ -403,6 +432,7 @@ class WebGame {
         
         this.remainingMines = Number(Board.getNumMines(this.width, this.height, this.mines));
         this.timeSpent = 0;
+        this.timerCallback = null;
 
         this.resetDigs(this.remainingMines, this.minesDigs);
         this.resetDigs(this.timeSpent, this.timerDigs);
@@ -469,6 +499,20 @@ class WebGame {
         }
     }
 
+    getTrainingMode(): boolean {
+        let modeVal = (<HTMLInputElement>this.doc.querySelector('input[name="mode"]:checked')!).value;
+        if (modeVal === "regular") {
+            return false;
+        }
+        else if (modeVal === "training") {
+            return true;
+        }
+        else {
+            console.log("Unrecognized mode. Defaulting to Regular...");
+            return false;
+        }
+    }
+
     revealDoubleClick() {
         this.currHover.clear();
         if (this.hover !== null) {
@@ -523,8 +567,7 @@ class WebGame {
 
     spaceClick(tileIdx: TileIdx, flag: boolean) {
         if (this.game !== null) {
-            let retPair = this.game.revealAround(tileIdx, flag);
-            let retType = retPair[0], retArr = retPair[1];
+            let [retOkay, retType, retArr] = this.game.revealAround(tileIdx, flag);
             if (retType === "flag") {
                 this.flag(tileIdx);
             }
@@ -538,16 +581,22 @@ class WebGame {
                         break;
                     }
                 }
+                // check if we training lost or not
+                if (retOkay) {
+                    this.checkWin();
+                }
+                else {
+                    this.lose(null);
+                }
                 this.checkFace();
-                this.checkWin();
             }
         }
     }
 
     emptyClick(tileIdx: TileIdx) {
         if (this.game === null) {
-            this.game = new Board(this.width, this.height, tileIdx, this.mines);
-            setTimeout(() => this.timer(), 1000);
+            this.game = new Board(this.width, this.height, tileIdx, this.mines, this.training);
+            this.timerCallback = setTimeout(() => this.timer(), 1000);
         }
         let retArr = this.game.revealIdx(tileIdx);
         for (let pair of retArr) {
@@ -568,6 +617,8 @@ class WebGame {
 
     checkWin() {
         if (this.game !== null && this.game.gameState === 1) {
+            this.stopTimer();
+            this.updateDigs(this.remainingMines, 0, this.minesDigs);
             this.revealWin();
         }
     }
@@ -579,7 +630,13 @@ class WebGame {
         let prevTime = this.timeSpent;
         this.timeSpent += 1;
         this.updateDigs(prevTime, this.timeSpent, this.timerDigs);
-        setTimeout(() => this.timer(), 1000);
+        this.timerCallback = setTimeout(() => this.timer(), 1000);
+    }
+
+    stopTimer() {
+        if (this.timerCallback !== null) {
+            clearTimeout(this.timerCallback);
+        }
     }
 
     removeAttrs(tileIdx: TileIdx, tile: HTMLElement, reveal: boolean) {
@@ -601,9 +658,7 @@ class WebGame {
         let tile = this.getTile(tileIdx);
         this.removeAttrs(tileIdx, tile, true);
         if (num === "mine") {
-            tile.classList.add("lose");
-            tile.classList.add("mine");
-            this.revealLose(tileIdx);
+            this.lose(tileIdx);
             return true;
         }
         else if (num === "empty") {
@@ -615,27 +670,43 @@ class WebGame {
         }
     }
 
-    revealLose(tileIdx: TileIdx) {
+    lose(tileIdx: null | TileIdx) {
+        this.stopTimer();
+
+        if (tileIdx !== null) {
+            let tile = this.getTile(tileIdx);
+            tile.classList.add("lose");
+            tile.classList.add("mine");
+        }
+        this.revealLose(tileIdx);
+    }
+
+    revealLose(tileIdx: null | TileIdx) {
         if (this.game === null) {
             return;
         }
 
-        let results = this.game.getResults();
-        let incorrect = results[0];
-        let missing = results[1];
-        let loseSquare = this.game.getSquare(tileIdx);
-        missing.delete(loseSquare);
+        let [incorrect, missing] = this.game.getResults();
+        if (tileIdx !== null) {
+            let loseSquare = this.game.getSquare(tileIdx);
+            missing.delete(loseSquare);
+        }
+        
 
         for (let inc of incorrect) {
             let tile = this.getTile(inc.idx);
-            this.removeAttrs(tileIdx, tile, true);
+            if (tileIdx !== null) {
+                this.removeAttrs(tileIdx, tile, true);
+            }
             tile.classList.remove("flagged");
             tile.classList.add("no_mine");
         }
 
         for (let miss of missing) {
             let tile = this.getTile(miss.idx);
-            this.removeAttrs(tileIdx, tile, true);
+            if (tileIdx !== null) {
+                this.removeAttrs(tileIdx, tile, true);
+            }
             tile.classList.add("mine");
         }
     }
@@ -655,12 +726,13 @@ class WebGame {
         }
     }
 
+    // true for safe, false for lost
     flag(tileIdx: TileIdx) {
         if (this.game === null) {
             return;
         }
         else {
-            let ret = this.game.flagSquare(tileIdx);
+            let [correctlyFlagged, ret] = this.game.flagSquare(tileIdx);
             for (let pair of ret) {
                 let tile = this.getTile(pair);
                 tile.onmousedown = e => {
@@ -672,6 +744,12 @@ class WebGame {
                 let prevNum = this.remainingMines
                 this.remainingMines -= 1;
                 this.updateDigs(prevNum, this.remainingMines, this.minesDigs);
+            }
+
+            // check if we lost in training mode
+            if (!correctlyFlagged && this.training) {
+                this.lose(null);
+                this.checkFace();
             }
         }
     }
@@ -693,6 +771,10 @@ class WebGame {
                 let prevNum = this.remainingMines
                 this.remainingMines += 1;
                 this.updateDigs(prevNum, this.remainingMines, this.minesDigs);
+            }
+            if (ret.length > 0) {
+                this.lose(null);
+                this.checkFace();
             }
         }
     }
@@ -785,6 +867,13 @@ class WebGame {
         for (let j = 0; j < this.height; j++) {
             let row = this.genRow(j);
             board.appendChild(row);
+        }
+    }
+
+    deleteBoard() {
+        var board = this.doc.getElementById("game")!;
+        while (board.firstChild !== null) {
+            board.removeChild(board.firstChild);
         }
     }
 
@@ -905,6 +994,7 @@ class WebGame {
 
     resetGame() {
         this.game = null;
+        this.stopTimer();
         this.resetBoard();
         this.resetCounters();
         this.updateFace();

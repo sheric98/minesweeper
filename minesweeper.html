@@ -8,25 +8,60 @@
     <script src="minesweeper.js"></script>
   </head>
   <body>
-    <div id="container">
-      <div id="topbar">
-        <div class="digits">
-          <div id="mines1" class="digit"></div>
-          <div id="mines2" class="digit"></div>
-          <div id="mines3" class="digit"></div>
-          <div id="mines4" class="digit"></div>
+    <div id="total_container">
+      <div id="settings">
+        <div class="settings_container">
+          <div>
+            <label for="height">Height:</label>
+            <input type="text" id="height" name="height" value="16">
+          </div>
+          <div style="height: 10%"></div>
+          <div>
+            <label for="width">Width:</label>
+            <input type="width" id="width" name="width" value="30">
+          </div>
+          <div style="height: 10%"></div>
+          <div>
+            <label for="mines">Mines:</label>
+            <input type="mines" id="mines" name="mines" value="99">
+          </div>
         </div>
-        <div id="restart" onclick="webGame.resetGame()">
-  
+        <div class="settings_container">
+          <div>Mode:</div>
+          <div style="height: 5%"></div>
+          <div>
+            <input type="radio" id="reg" name="mode" value="regular" checked="checked">
+            <label for="reg">Regular</label>
+          </div>
+          <div>
+            <input type="radio" id="training" name="mode" value="training">
+            <label for="training">Training</label>
+          </div>
         </div>
-        <div class="digits">
-          <div id="timer1" class="digit"></div>
-          <div id="timer2" class="digit"></div>
-          <div id="timer3" class="digit"></div>
-          <div id="timer4" class="digit"></div>
+        <div id="create">
+          <button onClick="create();">Create New Game</button>
         </div>
       </div>
-      <div id="game">
+      <div id="container">
+        <div id="topbar">
+          <div class="digits">
+            <div id="mines1" class="digit"></div>
+            <div id="mines2" class="digit"></div>
+            <div id="mines3" class="digit"></div>
+            <div id="mines4" class="digit"></div>
+          </div>
+          <div id="restart" onclick="webGame.resetGame()">
+    
+          </div>
+          <div class="digits">
+            <div id="timer1" class="digit"></div>
+            <div id="timer2" class="digit"></div>
+            <div id="timer3" class="digit"></div>
+            <div id="timer4" class="digit"></div>
+          </div>
+        </div>
+        <div id="game">
+        </div>
       </div>
     </div>
   </body>
@@ -35,6 +70,12 @@
     window.onload = () => {
       webGame.genBoard();
     };
+
+    function create() {
+      webGame.deleteBoard();
+      webGame = new WebGame(document);
+      webGame.genBoard();
+    }
     
   </script>
 </html>
