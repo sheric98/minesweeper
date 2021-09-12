@@ -402,6 +402,7 @@ class WebGame {
     currHover: Set<number>;
     training: boolean;
     timerCallback: null | number;
+    startingTime: number;
 
     constructor(
         doc: Document,
@@ -432,6 +433,7 @@ class WebGame {
         
         this.remainingMines = Number(Board.getNumMines(this.width, this.height, this.mines));
         this.timeSpent = 0;
+        this.startingTime = -1;
         this.timerCallback = null;
 
         this.resetDigs(this.remainingMines, this.minesDigs);
@@ -593,12 +595,17 @@ class WebGame {
         }
     }
 
+    startGame(tileIdx: TileIdx) {
+        this.game = new Board(this.width, this.height, tileIdx, this.mines, this.training);
+        this.startingTime = Date.now();
+        this.timerCallback = setTimeout(() => this.timer(), 1000);
+    }
+
     emptyClick(tileIdx: TileIdx) {
         if (this.game === null) {
-            this.game = new Board(this.width, this.height, tileIdx, this.mines, this.training);
-            this.timerCallback = setTimeout(() => this.timer(), 1000);
+            this.startGame(tileIdx);
         }
-        let retArr = this.game.revealIdx(tileIdx);
+        let retArr = this.game!.revealIdx(tileIdx);
         for (let pair of retArr) {
             let idx = pair[0], num = pair[1];
             if (this.revealPair(idx, num)) {
@@ -629,13 +636,18 @@ class WebGame {
         } 
         let prevTime = this.timeSpent;
         this.timeSpent += 1;
+        let nextUpdate = this.timeSpent + 1;
         this.updateDigs(prevTime, this.timeSpent, this.timerDigs);
-        this.timerCallback = setTimeout(() => this.timer(), 1000);
+        let milliToWait = this.startingTime + (nextUpdate * 1000) - Date.now();
+        this.timerCallback = setTimeout(() => this.timer(), milliToWait);
     }
 
     stopTimer() {
         if (this.timerCallback !== null) {
             clearTimeout(this.timerCallback);
+            this.timerCallback = null;
+            this.startingTime = -1;
+            this.timeSpent = 0;
         }
     }
 
@@ -772,7 +784,7 @@ class WebGame {
                 this.remainingMines += 1;
                 this.updateDigs(prevNum, this.remainingMines, this.minesDigs);
             }
-            if (ret.length > 0) {
+            if (this.training && ret.length > 0) {
                 this.lose(null);
                 this.checkFace();
             }
@@ -871,6 +883,7 @@ class WebGame {
     }
 
     deleteBoard() {
+        this.stopTimer();
         var board = this.doc.getElementById("game")!;
         while (board.firstChild !== null) {
             board.removeChild(board.firstChild);
@@ -999,4 +1012,21 @@ class WebGame {
         this.resetCounters();
         this.updateFace();
     }
+}
+
+// Direct interaction
+
+var webGame: null | WebGame = null;
+window.onload = () => {
+    webGame = new WebGame(document);
+    console.log("onload");
+    webGame.genBoard();
+};
+
+function create() {
+    if (webGame !== null) {
+        webGame.deleteBoard();
+    }
+    webGame = new WebGame(document);
+    webGame.genBoard();
 }

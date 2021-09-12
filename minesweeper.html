@@ -50,7 +50,7 @@
             <div id="mines3" class="digit"></div>
             <div id="mines4" class="digit"></div>
           </div>
-          <div id="restart" onclick="webGame.resetGame()">
+          <div id="restart" onClick="create();">
     
           </div>
           <div class="digits">
@@ -65,17 +65,4 @@
       </div>
     </div>
   </body>
-  <script>
-    var webGame = new WebGame(document);
-    window.onload = () => {
-      webGame.genBoard();
-    };
-
-    function create() {
-      webGame.deleteBoard();
-      webGame = new WebGame(document);
-      webGame.genBoard();
-    }
-    
-  </script>
 </html>
