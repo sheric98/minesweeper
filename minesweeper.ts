@@ -1510,9 +1510,10 @@ class ProbModelWorker {
                     safes = new Set();
                 }
 
+                let EPSILON = 0.0001;
                 // potentially lowest
                 // essentially equal
-                if (Math.abs(lowest - avgUnusedMines) < 0.0001) {
+                if (Math.abs(lowest - avgUnusedMines) < EPSILON) {
                     this.unused.forEach(square => lowestMines.add(square));
                 }
                 else if (lowest > avgUnusedMines) {
@@ -1520,8 +1521,13 @@ class ProbModelWorker {
                 }
 
                 // check if unusedMines is 0. if so, add to safes
-                if (avgUnusedMines < 0.0001) {
+                if (avgUnusedMines < EPSILON) {
                     this.unused.forEach(square => safes.add(square));
+                }
+
+                // check if unusedMines is close to total number of unused tiles
+                if (Math.abs(avgUnusedMines - this.unused.size) < EPSILON) {
+                    this.unused.forEach(square => flags.add(square));
                 }
 
                 return [safes, flags, lowestMines];
