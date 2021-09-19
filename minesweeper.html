@@ -11,6 +11,17 @@
     <div id="total_container">
       <div id="settings">
         <div class="settings_container">
+          <div id="reveal_safes">
+            <button onClick="getSafes();">Reveal Guaranteed Safe Squares</button>
+          </div>
+          <div id="reveal_flags">
+            <button onClick="getFlags();">Reveal Guaranteed Flags</button>
+          </div>
+          <div id="reveal_lowest">
+            <button onClick="getLowest();">Reveal Lowest Probability Squares</button>
+          </div>
+        </div>
+        <div class="settings_container">
           <div>
             <label for="height">Height:</label>
             <input type="text" id="height" name="height" value="16">

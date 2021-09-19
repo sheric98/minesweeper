@@ -64,6 +64,18 @@ class Square {
         this.flagged.delete(flag_sq);
         this.hidden.add(flag_sq);
     }
+
+    get_num(): null | number {
+        if (this.tile === "mine") {
+            return null;
+        }
+        else if (this.tile === "empty") {
+            return 0;
+        }
+        else {
+            return this.tile;
+        }
+    }
 }
 
 type TileIdx = [number, number]
@@ -97,6 +109,8 @@ class Board {
     unclearedSquares: bigint;
     gameState: GameState;
     training: boolean;
+    probModel: ProbModelWorker;
+    gameId: number[];
 
     static NEIGHS: TileIdx[] = [
         [1, 1], [1, 0], [1, -1],
@@ -123,6 +137,7 @@ class Board {
         tileIdx: TileIdx,
         mines: MineNum = 99n,
         training: boolean,
+        webGame: WebGame,
     ) {
         this.width = width;
         this.height = height;
@@ -135,6 +150,13 @@ class Board {
         this.mines = initPair[1];
         this.flags = new Set();
         this.gameState = 0;
+
+        let idSize = Math.ceil(Number(this.height * this.width) / 53);
+        this.gameId = Array(idSize).fill(0)
+
+        this.probModel = new ProbModelWorker(webGame);
+        let nums = this.squares.map(row => row.map(square => square.get_num()));
+        this.probModel.postMessage({init: [this.totMines, nums]});
     }
 
     getSquare(tileIdx: TileIdx): Square {
@@ -258,11 +280,19 @@ class Board {
         return [squares, mines];
     }
 
+    updateId(square: Square) {
+        let flatIdx = Board.convert2d1d(square.idx, this.width);
+        let arrIdx = Math.floor(flatIdx / 53);
+        let internalIdx = flatIdx % 53;
+        this.gameId[arrIdx] += (1 << internalIdx);
+    }
+
     revealSquare(square: Square): TileRet[] {
         if (this.gameState !== 0 || square.state == "displayed") {
             return [];
         }
         square.reveal();
+        this.updateId(square);
         var ret: TileRet[] = [[square.idx, square.tile]];
         if (square.tile === "mine") {
             this.gameState = -1;
@@ -282,8 +312,10 @@ class Board {
     }
 
     revealIdx(tileIdx: TileIdx): TileRet[] {
-        let x = tileIdx[0], y = tileIdx[1]
-        return this.revealSquare(this.squares[y][x]);
+        let x = tileIdx[0], y = tileIdx[1];
+        let tileRet = this.revealSquare(this.squares[y][x]);
+        this.probModel.postTileRet(tileRet);
+        return tileRet; 
     }
 
     flagSquare(tileIdx: TileIdx): [boolean, TileIdx[]] {
@@ -352,6 +384,8 @@ class Board {
                 return loseSpaceRet;
             }
             else {
+                // update model
+                this.probModel.postTileRet(ret);
                 return [true, "reveal", ret];
             }
         }
@@ -373,6 +407,10 @@ class Board {
         let missing = setDiff(this.mines, this.flags);
 
         return [incorrect, missing];
+    }
+
+    gameIdEquals(checkId: number[]): boolean {
+        return checkId.length === this.gameId.length && checkId.every((num, idx) => num == this.gameId[idx]);
     }
 }
 
@@ -403,6 +441,15 @@ class WebGame {
     training: boolean;
     timerCallback: null | number;
     startingTime: number;
+    currRequest: null | RequestMessage;
+    requestIdxs: Set<TileIdx>;
+    requestIdxsType: null | RequestMessage;
+
+    static requestToClassName: Map<RequestMessage, String> = new Map([
+        ["safes", "prob_safe"],
+        ["flags", "prob_flag"],
+        ["lowest", "prob_lowest"],
+    ]);
 
     constructor(
         doc: Document,
@@ -443,6 +490,9 @@ class WebGame {
         this.right = false;
 
         this.currHover = new Set();
+        this.currRequest = null;
+        this.requestIdxs = new Set();
+        this.requestIdxsType = null;
 
         this.initGameSpace();
     }
@@ -571,18 +621,18 @@ class WebGame {
         if (this.game !== null) {
             let [retOkay, retType, retArr] = this.game.revealAround(tileIdx, flag);
             if (retType === "flag") {
+                this.removeRequest();
                 this.flag(tileIdx);
             }
             else if (retType === "unflag") {
+                this.removeRequest();
                 this.unflag(tileIdx);
             }
             else {
-                for (let pair of retArr) {
-                    let idx = pair[0], num = pair[1];
-                    if (this.revealPair(idx, num)) {
-                        break;
-                    }
+                if (retArr.length > 0) {
+                    this.removeRequest();
                 }
+                this.processTileRets(retArr);
                 // check if we training lost or not
                 if (retOkay) {
                     this.checkWin();
@@ -596,7 +646,7 @@ class WebGame {
     }
 
     startGame(tileIdx: TileIdx) {
-        this.game = new Board(this.width, this.height, tileIdx, this.mines, this.training);
+        this.game = new Board(this.width, this.height, tileIdx, this.mines, this.training, this);
         this.startingTime = Date.now();
         this.timerCallback = setTimeout(() => this.timer(), 1000);
     }
@@ -606,14 +656,23 @@ class WebGame {
             this.startGame(tileIdx);
         }
         let retArr = this.game!.revealIdx(tileIdx);
-        for (let pair of retArr) {
-            let idx = pair[0], num = pair[1];
-            if (this.revealPair(idx, num)) {
-                break;
-            }
+        if (retArr.length > 0) {
+            this.removeRequest();
         }
+        this.processTileRets(retArr);
+        
         this.checkFace();
         this.checkWin();
+    }
+
+    processTileRets(tileRets: TileRet[]) {
+        if (this.game!.gameState == -1) {
+            let [loseIdx, _] = tileRets.find(pair => pair[1] === "mine")!;
+            this.lose(loseIdx);
+        }
+        else {
+            tileRets.forEach(pair => this.revealPair(pair[0], pair[1]));
+        }
     }
 
     checkFace() {
@@ -704,7 +763,6 @@ class WebGame {
             missing.delete(loseSquare);
         }
         
-
         for (let inc of incorrect) {
             let tile = this.getTile(inc.idx);
             if (tileIdx !== null) {
@@ -883,6 +941,9 @@ class WebGame {
     }
 
     deleteBoard() {
+        this.currRequest = null;
+        this.requestIdxsType = null;
+        this.requestIdxs.clear();
         this.stopTimer();
         var board = this.doc.getElementById("game")!;
         while (board.firstChild !== null) {
@@ -978,39 +1039,37 @@ class WebGame {
         }
     }
 
-    resetCounters() {
-        this.remainingMines = Number(
-            Board.getNumMines(this.width, this.height, this.mines));
-        this.timeSpent = 0;
-
-        this.resetDigs(this.remainingMines, this.minesDigs);
-        this.resetDigs(this.timeSpent, this.timerDigs);
-    }
-
-    resetTile(tileIdx: TileIdx) {
-        let tile = this.getTile(tileIdx);
-
-        // reset classes
-        tile.className = '';
-
-        this.defaultTileAttrs(tileIdx, tile);
-    }
-
-    resetBoard() {
-        for (let j = 0; j < this.height; j++) {
-            for (let i = 0; i < this.width; i++) {
-                let tileIdx: TileIdx = [i, j];
-                this.resetTile(tileIdx);
-            }
+    removeRequestSquares() {
+        // assume only have request squares active if request type is not null
+        if (this.requestIdxsType !== null) {
+            let classType = WebGame.requestToClassName.get(this.requestIdxsType)!.valueOf();
+            this.requestIdxs.forEach(idx => this.getTile(idx).classList.remove(classType));
+            this.requestIdxs.clear();
         }
     }
 
-    resetGame() {
-        this.game = null;
-        this.stopTimer();
-        this.resetBoard();
-        this.resetCounters();
-        this.updateFace();
+    removeRequest() {
+        this.currRequest = null;
+        this.removeRequestSquares();
+    }
+
+    makeRequest(request: RequestMessage) {
+        if (this.game !== null) {
+            this.currRequest = request;
+            this.game.probModel.postRequest(request);
+            this.removeRequestSquares();
+        }
+    }
+
+    receiveResponse(type: RequestMessage, gameId: number[], squares: TileIdx[]) {
+        if (this.game !== null && type === this.currRequest && this.game.gameIdEquals(gameId)) {
+            let classType = WebGame.requestToClassName.get(type)!.valueOf();
+            squares.forEach(idx => {
+                this.getTile(idx).classList.add(classType);
+                this.requestIdxs.add(idx);
+            });
+            this.requestIdxsType = type;
+        }
     }
 }
 
@@ -1019,7 +1078,6 @@ class WebGame {
 var webGame: null | WebGame = null;
 window.onload = () => {
     webGame = new WebGame(document);
-    console.log("onload");
     webGame.genBoard();
 };
 
@@ -1029,4 +1087,551 @@ function create() {
     }
     webGame = new WebGame(document);
     webGame.genBoard();
+}
+
+function getSafes() {
+    if (webGame !== null) {
+        webGame.makeRequest("safes");
+    }
+}
+
+function getFlags() {
+    if (webGame !== null) {
+        webGame.makeRequest("flags");
+    }
+}
+
+function getLowest() {
+    if (webGame !== null) {
+        webGame.makeRequest("lowest");
+    }
+}
+
+
+/* WEB_WORKER INTERACTION */
+type NumOrNull = null | number;
+type RequestMessage = "safes" | "flags" | "lowest";
+type InitMessage = [bigint, NumOrNull[][]]
+
+interface MessageObj {
+    init?: InitMessage;
+    reveal?: TileIdx[];
+    request?: RequestMessage;
+}
+
+interface ResponseObj {
+    type: RequestMessage;
+    gameId: number[];
+    squares: TileIdx[];
+}
+
+class ProbModelWorker {
+    worker: Worker;
+
+    static interaction() {
+        /* PROB_MODEL WEB WORKER */
+
+        type SquareNum = null | number;
+        type SquareIdx = [number, number];
+
+        class ProbSquare {
+            num: null | number;
+            neighs: Set<ProbSquare>;
+            hiddenNeighs: Set<ProbSquare>;
+            idx: SquareIdx;
+
+            constructor(num: SquareNum) {
+                this.num = num;
+                this.neighs = new Set();
+                this.hiddenNeighs = new Set();
+                this.idx = [0, 0];
+            }
+
+            addNeighs(neighs: Set<ProbSquare>) {
+                this.neighs = new Set(neighs);
+                this.hiddenNeighs = new Set(neighs);
+            }
+
+            setIdx(idx: SquareIdx) {
+                this.idx = idx;
+            }
+
+            reveal() {
+                this.neighs.forEach(neigh => neigh.hiddenNeighs.delete(this));
+            }
+        }
+
+        class ProbBoard {
+            board: ProbSquare[][];
+            width: number;
+            height: number;
+            gameId: number[];
+
+            static NEIGHS: SquareIdx[] = [
+                [1, 1], [1, 0], [1, -1],
+                [0, 1], [0, -1],
+                [-1, 1], [-1, 0], [-1, -1]
+            ];
+
+            constructor(nums: SquareNum[][]) {
+                this.board = nums.map(row => row.map(num => new ProbSquare(num)));
+                this.height = nums.length;
+                this.width = nums.length > 0 ? nums[0].length : 0;
+                let idSize = Math.ceil((this.height * this.width) / 53);
+                this.gameId = Array(idSize).fill(0)
+
+                for (let y = 0; y < this.height; y++) {
+                    for (let x = 0; x < this.width; x++) {
+                        let idx: SquareIdx = [x, y];
+                        this.getSquare(idx).addNeighs(this.getNeighs(idx));
+                        this.getSquare(idx).setIdx(idx);
+                    }
+                }
+            }
+
+            inBoard(idx: SquareIdx): boolean {
+                let [x, y] = idx;
+                return x >= 0 && x < this.width && y >= 0 && y < this.height;
+            }
+
+            getSquare(idx: SquareIdx): ProbSquare {
+                let [x, y] = idx;
+                return this.board[y][x];
+            }
+
+            getNeighs(idx: SquareIdx): Set<ProbSquare> {
+                let [x, y] = idx;
+                let SquareArr = ProbBoard.NEIGHS
+                    .map(neigh => <SquareIdx> [x + neigh[0], y + neigh[1]])
+                    .filter(this.inBoard.bind(this))
+                    .map(this.getSquare.bind(this));
+                return new Set(SquareArr);
+            }
+
+            updateArr(idx: SquareIdx) {
+                let [x, y] = idx;
+                let flatIdx = y * this.width + x;
+                let arrIdx = Math.floor(flatIdx / 53);
+                let internalIdx = flatIdx % 53;
+                this.gameId[arrIdx] += (1 << internalIdx);
+            }
+        }
+
+        function comb_and_comp<T>(lst: T[], n: number): null | [T[], T[]][] {
+            var fn = function(active: T[], unused: T[], rest: T[], n: number, a: [T[], T[]][]) {
+                if (active.length + rest.length < n) {
+                    return;
+                }
+                if (active.length == n) {
+                    a.push([active, unused.concat(rest)]);
+                }
+                else {
+                    fn(active.concat([rest[0]]), unused, rest.slice(1), n, a);
+                    fn(active, unused.concat([rest[0]]), rest.slice(1), n, a);
+                }
+            }
+
+            // error checking.
+            if (n > lst.length) {
+                return null;
+            }
+
+            let ret: [T[], T[]][] = []
+            fn([], [], lst, n, ret);
+            return ret;
+        }
+
+        class Chain {
+            maxMines: bigint;
+            mines: Set<ProbSquare>;
+            newMines: ProbSquare[];
+            safe: Set<ProbSquare>;
+            parent: null | Chain;
+            children: Set<Chain>
+            leaves: number;
+
+            constructor(totMines: bigint) {
+                this.maxMines = totMines;
+                this.mines = new Set();
+                this.newMines = [];
+                this.safe = new Set();
+                this.parent = null;
+                this.children = new Set();
+                this.leaves = 0;
+            }
+
+            calculateLeaves() {
+                if (this.children.size == 0) {
+                    this.leaves = 1;
+                }
+                else {
+                    let totLeaves = 0;
+                    for (let child of this.children) {
+                        child.calculateLeaves()
+                        totLeaves += child.leaves;
+                    }
+                    this.leaves = totLeaves;
+                }
+            }
+
+            // return avail numbers as well as adjacent mines
+            availNeighs(square: ProbSquare): [ProbSquare[], number] {
+                var ret = []
+                var adjMines = 0;
+                for (let neigh of square.hiddenNeighs) {
+                    if (this.mines.has(neigh)) {
+                        adjMines++;
+                    }
+                    else if (!this.safe.has(neigh)) {
+                        ret.push(neigh);
+                    }
+                }
+                return [ret, adjMines];
+            }
+
+            // try to return 
+            getValidNeighsAndNumMines(square: ProbSquare): null | [ProbSquare[], number] {
+                let [neighs, usedMines] = this.availNeighs(square);
+                let tileNum = square.num!;
+                let neededMines = tileNum - usedMines;
+                if (neededMines < 0 || neighs.length < neededMines
+                        || this.mines.size + neededMines > this.maxMines) {
+                    return null;
+                }
+                else {
+                    return [neighs, neededMines];
+                }
+            }
+
+            // returns pair of [new chain, added mines]
+            addChild(newMines: ProbSquare[], newSafes: ProbSquare[]): Chain {
+                var child = new Chain(this.maxMines);
+                child.mines = new Set(this.mines);
+                child.safe = new Set(this.safe);
+                newMines.forEach(square => child.mines.add(square));
+                newSafes.forEach(square => child.safe.add(square));
+                child.newMines = newMines;
+                child.parent = this;
+                this.children.add(child);
+
+                return child;
+            }
+
+            // returns list of [new chain, new mines] pairs
+            enumerateChain(square: ProbSquare): Chain[] {
+                let [validNeighs, numMines] = this.getValidNeighsAndNumMines(square)!;
+                let combinations = comb_and_comp(validNeighs, numMines)!;
+
+                // add all children.
+                let ret = combinations.map(pair => this.addChild(pair[0], pair[1]));
+                
+                return ret;
+            }
+
+            // return chains to add and chains to delete
+            updateChain(square: ProbSquare): [Chain[], Chain[]] {
+                // check validity
+                if (this.getValidNeighsAndNumMines(square) === null) {
+                    return [[], [this]];
+                }
+                // if leaf node
+                if (this.children.size == 0) {
+                    return [this.enumerateChain(square), []];
+                }
+                else {
+                    let updates: Chain[] = []
+                    let deletes: Chain[] = []
+                    for (let child of this.children) {
+                        let [childUpdates, childDeletes] = child.updateChain(square);
+                        childUpdates.forEach(upd => updates.push(upd));
+                        childDeletes.forEach(del => deletes.push(del));
+                    }
+
+                    return [updates, deletes];
+                }
+            }
+
+            removeChainFromMap(map: Map<ProbSquare, Set<Chain>>) {
+                for (let square of this.newMines) {
+                    map.get(square)!.delete(this);
+                }
+                this.children.forEach(child => child.removeChainFromMap(map));
+            }
+
+            removeChain(map: Map<ProbSquare, Set<Chain>>) {
+                // stop at the root. Shouldn't ever get here.
+                if (this.parent === null) {
+                    return;
+                }
+                // remove parent instead if only child left.
+                if (this.parent.children.size <= 1) {
+                    this.parent.removeChain(map);
+                    return;
+                }
+
+                // remove from parent
+                if (this.parent !== null) {
+                    this.parent.children.delete(this);
+                }
+
+                // remove self from map (inlcuding children)
+                this.removeChainFromMap(map);
+            }
+        }
+
+        class ChainManager {
+            mineToChains: Map<ProbSquare, Set<Chain>>;
+            root: Chain;
+            squaresInChain: Set<ProbSquare>;
+            unused: Set<ProbSquare>;
+            revealed: Set<ProbSquare>;
+            maxMines: bigint;
+            board: ProbBoard;
+
+            constructor(board: ProbBoard, maxMines: bigint) {
+                this.board = board;
+                let squares = this.board.board.flat();
+                this.mineToChains = new Map();
+                this.unused = new Set();
+                for (let square of squares) {
+                    this.mineToChains.set(square, new Set());
+                    this.unused.add(square);
+                }
+                this.root = new Chain(maxMines);
+                this.squaresInChain = new Set();
+                this.revealed = new Set();
+                this.maxMines = maxMines;
+            }
+
+            updateChain(update: Chain) {
+                update.newMines.forEach(mine => this.mineToChains.get(mine)!.add(update));
+            }
+
+            // returns the average number of mines used
+            updateChains(updates: Chain[]): number {
+                let totMines = 0;
+                for (let update of updates) {
+                    this.updateChain(update);
+                    totMines += update.mines.size;
+                }
+                return totMines / updates.length;
+            }
+
+            deleteChains(chains: Iterable<Chain>) {
+                for (let chain of chains) {
+                    chain.removeChain(this.mineToChains);
+                }
+            }
+
+            // return "hidden" neighbors at the time of this operation
+            updateSquaresInChainsAndRevealed(square: ProbSquare) {
+                this.squaresInChain.delete(square);
+                this.revealed.add(square);
+                this.unused.delete(square);
+                square.reveal();
+
+                for (let neigh of square.neighs) {
+                    if (!this.revealed.has(neigh)) {
+                        this.squaresInChain.add(neigh);
+                        this.unused.delete(neigh);
+                    }
+                }
+            }
+
+            // return in order safe, flags, lowest_prob
+            getSafeFlagLowest(avgMines: number): [Set<ProbSquare>, Set<ProbSquare>, Set<ProbSquare>]
+            {
+                let lowest = Number.MAX_SAFE_INTEGER;
+                let lowestMines: Set<ProbSquare> = new Set();
+                let flags: Set<ProbSquare> = new Set();
+                let safes: Set<ProbSquare>;
+                let totalChains = this.root.leaves;
+                let avgUnusedMines = (Number(this.maxMines) - avgMines) / this.unused.size;
+
+                // only have to check squares in the chain
+                for (let square of this.squaresInChain) {
+                    let chains = this.mineToChains.get(square)!;
+                    let mineCount = this.totalChainCount(chains);
+
+                    if (mineCount < lowest) {
+                        lowest = mineCount;
+                        lowestMines.clear();
+                        lowestMines.add(square);
+                    }
+                    else if (mineCount == lowest) {
+                        lowestMines.add(square);
+                    }
+
+                    if (mineCount == totalChains) {
+                        flags.add(square);
+                    }
+                }
+
+                // lowest are all safe
+                if (lowest == 0) {
+                    safes = new Set(lowestMines);
+                }
+                else {
+                    safes = new Set();
+                }
+
+                // potentially lowest
+                if (lowest > avgUnusedMines) {
+                    lowestMines = new Set(this.unused);
+                }
+
+                return [safes, flags, lowestMines];
+            }
+
+            totalChainCount(chains: Set<Chain>): number {
+                let count = 0;
+                for (let chain of chains) {
+                    count += chain.leaves;
+                }
+                return count;
+            }
+
+            // reveal a given square to be safe.
+            // return new safe squares, flag squares, and lowest_prob squares
+            revealSquare(squareIdx: SquareIdx): [Set<ProbSquare>, Set<ProbSquare>, Set<ProbSquare>] {
+                let square = this.board.getSquare(squareIdx);
+                // first remove all chains that have this square as a mine
+                let incorrectMineChains = this.mineToChains.get(square)!;
+                this.deleteChains(incorrectMineChains);
+
+                // next update our chain / revealed data
+                this.updateSquaresInChainsAndRevealed(square);
+
+                // then try updating remainging chains
+                let [updates, deletes] = this.root.updateChain(square);
+
+                // delete all the chains to now delete
+                this.deleteChains(deletes);
+
+                // update map
+                let avgMines = this.updateChains(updates);
+
+                this.root.calculateLeaves();
+
+                return this.getSafeFlagLowest(avgMines);
+            }
+        }
+
+        class ProbModel {
+            updates: SquareIdx[];
+            chainManager: ChainManager;
+            board: ProbBoard;
+            safes: Set<ProbSquare>;
+            lowest: Set<ProbSquare>;
+            flags: Set<ProbSquare>;
+
+            constructor(nums: SquareNum[][], maxMines: bigint) {
+                this.board = new ProbBoard(nums);
+                this.chainManager = new ChainManager(this.board, maxMines);
+                this.updates = [];
+                this.safes = new Set();
+                this.lowest = new Set();
+                this.flags = new Set();
+            }
+
+            addSquares(squareIdxs: SquareIdx[]) {
+                squareIdxs.forEach(idx => this.updates.push(idx));
+
+                while (this.updates.length > 0) {
+                    let [safes, flags, lowest] = this.chainManager.revealSquare(this.updates[0]);
+                    this.safes = safes;
+                    this.flags = flags;
+                    this.lowest = lowest;
+                    this.board.updateArr(this.updates.shift()!);
+                }
+            }
+
+            fulfillRequest(request: RequestMessage): Set<ProbSquare> {
+                if (request === "safes") {
+                    return this.safes;
+                }
+                else if (request === "flags") {
+                    return this.flags;
+                }
+                else {
+                    return this.lowest;
+                }
+            }
+        }
+
+        var probModel: null | ProbModel = null;
+
+        onmessage = function(e) {
+            let messageObj = <MessageObj> e.data;
+
+            if (messageObj.init !== undefined) {
+                let [maxMines, nums] = messageObj.init;
+                probModel = new ProbModel(nums, maxMines);
+            }
+
+            else if (messageObj.reveal !== undefined) {
+                probModel!.addSquares(messageObj.reveal);
+            }
+
+            else if (messageObj.request !== undefined) {
+                let squares = probModel!.fulfillRequest(messageObj.request);
+                let idxs: SquareIdx[] = [];
+                squares.forEach(square => idxs.push(square.idx));
+                postMessage({
+                    squares: idxs,
+                    type: messageObj.request,
+                    gameId: probModel!.board.gameId,
+                });
+            }
+        };
+    }
+
+    static convertFnToWorkerStr(fn: Function) {
+        let origStr = fn.toString();
+        let lparen = origStr.indexOf('(');
+        if (lparen < 0) {
+            console.log('Cannot convert function string. Returning original');
+            return origStr;
+        }
+        else {
+            return 'function' + origStr.substring(lparen);
+        }
+    }
+
+    constructor(webGame: WebGame) {
+        let blobURL = URL.createObjectURL(new Blob(
+            ['(', ProbModelWorker.convertFnToWorkerStr(ProbModelWorker.interaction), ")()"],
+            {type: "application/javascript"})
+        );
+        this.worker = new Worker(blobURL);
+        this.worker.onmessage = (event) => ProbModelWorker.receiveMessage(webGame, event);
+        URL.revokeObjectURL(blobURL);
+    }
+
+    static receiveMessage(webGame: WebGame, event: MessageEvent<any>) {
+        let responseObj = <ResponseObj> event.data;
+        webGame.receiveResponse(responseObj.type, responseObj.gameId, responseObj.squares);
+    }
+
+    postMessage(message: MessageObj) {
+        this.worker.postMessage(message);
+    }
+
+    postTileRet(tileRets: TileRet[]) {
+        let messageIdxs: TileIdx[] = [];
+        for (let [idx, tile] of tileRets) {
+            if (tile === "mine") {
+                // don't update losses
+                return;
+            }
+            else {
+                messageIdxs.push(idx);
+            }
+        }
+        this.postMessage({reveal: messageIdxs});
+    }
+
+    postRequest(request: RequestMessage) {
+        this.postMessage({request: request});
+    }
 }
