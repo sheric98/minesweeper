@@ -1511,8 +1511,17 @@ class ProbModelWorker {
                 }
 
                 // potentially lowest
-                if (lowest > avgUnusedMines) {
+                // essentially equal
+                if (Math.abs(lowest - avgUnusedMines) < 0.0001) {
+                    this.unused.forEach(square => lowestMines.add(square));
+                }
+                else if (lowest > avgUnusedMines) {
                     lowestMines = new Set(this.unused);
+                }
+
+                // check if unusedMines is 0. if so, add to safes
+                if (avgUnusedMines < 0.0001) {
+                    this.unused.forEach(square => safes.add(square));
                 }
 
                 return [safes, flags, lowestMines];
