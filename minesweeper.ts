@@ -1133,6 +1133,7 @@ class ProbModelWorker {
 
         type SquareNum = null | number;
         type SquareIdx = [number, number];
+        type MinesAndSafes = [Set<ProbSquare>, Set<ProbSquare>];
 
         class ProbSquare {
             num: null | number;
@@ -1201,11 +1202,11 @@ class ProbModelWorker {
 
             getNeighs(idx: SquareIdx): Set<ProbSquare> {
                 let [x, y] = idx;
-                let SquareArr = ProbBoard.NEIGHS
+                let squareArr = ProbBoard.NEIGHS
                     .map(neigh => <SquareIdx> [x + neigh[0], y + neigh[1]])
-                    .filter(this.inBoard.bind(this))
-                    .map(this.getSquare.bind(this));
-                return new Set(SquareArr);
+                    .filter(idx => this.inBoard.bind(this)(idx))
+                    .map(idx => this.getSquare.bind(this)(idx));
+                return new Set(squareArr);
             }
 
             updateArr(idx: SquareIdx) {
@@ -1244,33 +1245,39 @@ class ProbModelWorker {
         class Chain {
             maxMines: bigint;
             mines: Set<ProbSquare>;
-            newMines: ProbSquare[];
+            newMines: Set<ProbSquare>;
             safe: Set<ProbSquare>;
             parent: null | Chain;
             children: Set<Chain>
             leaves: number;
+            leafChains: Chain[];
 
             constructor(totMines: bigint) {
                 this.maxMines = totMines;
                 this.mines = new Set();
-                this.newMines = [];
+                this.newMines = new Set();
                 this.safe = new Set();
                 this.parent = null;
                 this.children = new Set();
-                this.leaves = 0;
+                this.leaves = 1;
+                this.leafChains = [this];
             }
 
             calculateLeaves() {
                 if (this.children.size == 0) {
                     this.leaves = 1;
+                    this.leafChains = [this];
                 }
                 else {
                     let totLeaves = 0;
+                    let leafChains: Chain[] = [];
                     for (let child of this.children) {
                         child.calculateLeaves()
                         totLeaves += child.leaves;
+                        child.leafChains.forEach(chain => leafChains.push(chain));
                     }
                     this.leaves = totLeaves;
+                    this.leafChains = leafChains;
                 }
             }
 
@@ -1289,28 +1296,57 @@ class ProbModelWorker {
                 return [ret, adjMines];
             }
 
-            // try to return 
-            getValidNeighsAndNumMines(square: ProbSquare): null | [ProbSquare[], number] {
-                let [neighs, usedMines] = this.availNeighs(square);
+            extendMinesAndSafes(square: ProbSquare, minesAndHiddens: MinesAndSafes[]): MinesAndSafes[] {
+                let [availNeighs, adjMines] = this.availNeighs(square);
+                return minesAndHiddens.flatMap(minesAndHidden =>
+                    this.extendSingleMinesAndSafes(square, availNeighs, adjMines, minesAndHidden));
+            }
+
+            extendSingleMinesAndSafes(square: ProbSquare, availNeighs: ProbSquare[], adjMines: number, singleMinesAndSafes: MinesAndSafes): MinesAndSafes[] {
+                let [currMines, currHidden] = singleMinesAndSafes;
+                let currAvailNeighs: ProbSquare[] = [];
+                let currAdjMines = adjMines;
+                availNeighs.forEach(neigh => {
+                    if (currMines.has(neigh)) {
+                        currAdjMines++;
+                    }
+                    else if (!currHidden.has(neigh)) {
+                        currAvailNeighs.push(neigh);
+                    }
+                });
+
                 let tileNum = square.num!;
-                let neededMines = tileNum - usedMines;
-                if (neededMines < 0 || neighs.length < neededMines
-                        || this.mines.size + neededMines > this.maxMines) {
-                    return null;
+                let neededMines = tileNum - currAdjMines;
+
+                if (neededMines < 0 || currAvailNeighs.length < neededMines
+                    || this.mines.size + currMines.size + neededMines > this.maxMines) {
+                    return [];
                 }
                 else {
-                    return [neighs, neededMines];
+                    let combinations = comb_and_comp(currAvailNeighs, neededMines)!;
+                    return combinations.map(pair =>
+                        [new Set([...currMines, ...pair[0]]), new Set([...currHidden, ...pair[1]])]);
                 }
             }
 
+            getSquaresExtensions(squares: ProbSquare[]): MinesAndSafes[] {
+                var currMinesAndSafes: MinesAndSafes[] = [[new Set(), new Set()]];
+
+                squares.forEach(square => currMinesAndSafes = this.extendMinesAndSafes(square, currMinesAndSafes));
+                return currMinesAndSafes;
+            }
+
             // returns pair of [new chain, added mines]
-            addChild(newMines: ProbSquare[], newSafes: ProbSquare[]): Chain {
+            addChild(minesAndSafes: MinesAndSafes): Chain {
+                let [newMines, newSafes] = minesAndSafes;
                 var child = new Chain(this.maxMines);
                 child.mines = new Set(this.mines);
                 child.safe = new Set(this.safe);
-                newMines.forEach(square => child.mines.add(square));
+                newMines.forEach(square => {
+                    child.mines.add(square);
+                    child.newMines.add(square);
+                });
                 newSafes.forEach(square => child.safe.add(square));
-                child.newMines = newMines;
                 child.parent = this;
                 this.children.add(child);
 
@@ -1318,37 +1354,38 @@ class ProbModelWorker {
             }
 
             // returns list of [new chain, new mines] pairs
-            enumerateChain(square: ProbSquare): Chain[] {
-                let [validNeighs, numMines] = this.getValidNeighsAndNumMines(square)!;
-                let combinations = comb_and_comp(validNeighs, numMines)!;
+            enumerateChain(squares: ProbSquare[]): Chain[] {
+                let combinations = this.getSquaresExtensions(squares);
 
                 // add all children.
-                let ret = combinations.map(pair => this.addChild(pair[0], pair[1]));
+                let ret = combinations.map(combo => this.addChild(combo));
                 
                 return ret;
             }
 
-            // return chains to add and chains to delete
-            updateChain(square: ProbSquare): [Chain[], Chain[]] {
-                // check validity
-                if (this.getValidNeighsAndNumMines(square) === null) {
-                    return [[], [this]];
-                }
-                // if leaf node
-                if (this.children.size == 0) {
-                    return [this.enumerateChain(square), []];
-                }
-                else {
-                    let updates: Chain[] = []
-                    let deletes: Chain[] = []
-                    for (let child of this.children) {
-                        let [childUpdates, childDeletes] = child.updateChain(square);
-                        childUpdates.forEach(upd => updates.push(upd));
-                        childDeletes.forEach(del => deletes.push(del));
-                    }
+            // return new children for this leaf
+            updateLeafChain(squares: ProbSquare[]): Chain[] {
+                return this.enumerateChain(squares);
+            }
 
-                    return [updates, deletes];
+            // return chains to add and chains to delete
+            updateChain(squares: ProbSquare[]): [Chain[], Chain[]] {
+                // check validity
+                let updates: Chain[] = [];
+                let deletes: Chain[] = [];
+
+                for (let leafChain of this.leafChains) {
+                    let leafUpdates = leafChain.updateLeafChain(squares);
+                    // if no children, delete this branch
+                    if (leafUpdates.length == 0) {
+                        deletes.push(leafChain);
+                    }
+                    else {
+                        leafUpdates.forEach(updChain => updates.push(updChain));
+                    }
                 }
+
+                return [updates, deletes];
             }
 
             removeChainFromMap(map: Map<ProbSquare, Set<Chain>>) {
@@ -1368,11 +1405,7 @@ class ProbModelWorker {
                     this.parent.removeChain(map);
                     return;
                 }
-
-                // remove from parent
-                if (this.parent !== null) {
-                    this.parent.children.delete(this);
-                }
+                this.parent!.children.delete(this);
 
                 // remove self from map (inlcuding children)
                 this.removeChainFromMap(map);
@@ -1424,18 +1457,20 @@ class ProbModelWorker {
             }
 
             // return "hidden" neighbors at the time of this operation
-            updateSquaresInChainsAndRevealed(square: ProbSquare) {
-                this.squaresInChain.delete(square);
-                this.revealed.add(square);
-                this.unused.delete(square);
-                square.reveal();
+            updateSquaresInChainsAndRevealed(squares: ProbSquare[]) {
+                squares.forEach(square => {
+                    this.squaresInChain.delete(square);
+                    this.revealed.add(square);
+                    this.unused.delete(square);
+                    square.reveal();
+                });
 
-                for (let neigh of square.neighs) {
-                    if (!this.revealed.has(neigh)) {
-                        this.squaresInChain.add(neigh);
-                        this.unused.delete(neigh);
-                    }
-                }
+                let hiddens: Set<ProbSquare> = new Set()
+                squares.forEach(square => square.hiddenNeighs.forEach(hid => hiddens.add(hid)));
+                hiddens.forEach(neigh => {
+                    this.squaresInChain.add(neigh);
+                    this.unused.delete(neigh);
+                });
             }
 
             // return in order safe, flags, lowest_prob
@@ -1491,19 +1526,28 @@ class ProbModelWorker {
                 return count;
             }
 
+            // deleting only based on mines that exist
+            deleteInvalidMineChains(squares: ProbSquare[]) {
+                squares.forEach(square => this.deleteChains(this.mineToChains.get(square)!));
+            }
+
             // reveal a given square to be safe.
             // return new safe squares, flag squares, and lowest_prob squares
-            revealSquare(squareIdx: SquareIdx): [Set<ProbSquare>, Set<ProbSquare>, Set<ProbSquare>] {
-                let square = this.board.getSquare(squareIdx);
+            revealSquares(squareIdxs: SquareIdx[]): [Set<ProbSquare>, Set<ProbSquare>, Set<ProbSquare>] {
+                let squares = squareIdxs.map(squareIdx => this.board.getSquare(squareIdx))
+                                        .filter(square => !this.revealed.has(square));
+                                        
                 // first remove all chains that have this square as a mine
-                let incorrectMineChains = this.mineToChains.get(square)!;
-                this.deleteChains(incorrectMineChains);
+                this.deleteInvalidMineChains(squares);
+
+                // update leaves again after deleting
+                this.root.calculateLeaves();
 
                 // next update our chain / revealed data
-                this.updateSquaresInChainsAndRevealed(square);
+                this.updateSquaresInChainsAndRevealed(squares);
 
                 // then try updating remainging chains
-                let [updates, deletes] = this.root.updateChain(square);
+                let [updates, deletes] = this.root.updateChain(squares);
 
                 // delete all the chains to now delete
                 this.deleteChains(deletes);
@@ -1518,7 +1562,6 @@ class ProbModelWorker {
         }
 
         class ProbModel {
-            updates: SquareIdx[];
             chainManager: ChainManager;
             board: ProbBoard;
             safes: Set<ProbSquare>;
@@ -1528,21 +1571,19 @@ class ProbModelWorker {
             constructor(nums: SquareNum[][], maxMines: bigint) {
                 this.board = new ProbBoard(nums);
                 this.chainManager = new ChainManager(this.board, maxMines);
-                this.updates = [];
                 this.safes = new Set();
                 this.lowest = new Set();
                 this.flags = new Set();
             }
 
             addSquares(squareIdxs: SquareIdx[]) {
-                squareIdxs.forEach(idx => this.updates.push(idx));
-
-                while (this.updates.length > 0) {
-                    let [safes, flags, lowest] = this.chainManager.revealSquare(this.updates[0]);
+                if (squareIdxs.length > 0) {
+                    let [safes, flags, lowest] = this.chainManager.revealSquares(squareIdxs);
                     this.safes = safes;
                     this.flags = flags;
                     this.lowest = lowest;
-                    this.board.updateArr(this.updates.shift()!);
+    
+                    squareIdxs.forEach(squareIdx => this.board.updateArr(squareIdx));
                 }
             }
 
