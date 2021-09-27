@@ -12,13 +12,13 @@
       <div id="settings">
         <div class="settings_container">
           <div id="reveal_safes">
-            <button onClick="getSafes();">Reveal Guaranteed Safe Squares</button>
+            <button id="reveal_safes_button">Reveal Guaranteed Safe Squares</button>
           </div>
           <div id="reveal_flags">
-            <button onClick="getFlags();">Reveal Guaranteed Flags</button>
+            <button id="reveal_flags_button">Reveal Guaranteed Flags</button>
           </div>
           <div id="reveal_lowest">
-            <button onClick="getLowest();">Reveal Lowest Probability Squares</button>
+            <button id="reveal_lowest_button">Reveal Lowest Probability Squares</button>
           </div>
         </div>
         <div class="settings_container">
@@ -26,12 +26,12 @@
             <label for="height">Height:</label>
             <input type="text" id="height" name="height" value="16">
           </div>
-          <div style="height: 10%"></div>
+          <div class=divider_10></div>
           <div>
             <label for="width">Width:</label>
             <input type="width" id="width" name="width" value="30">
           </div>
-          <div style="height: 10%"></div>
+          <div class="divider_10"></div>
           <div>
             <label for="mines">Mines:</label>
             <input type="mines" id="mines" name="mines" value="99">
@@ -39,7 +39,7 @@
         </div>
         <div class="settings_container">
           <div>Mode:</div>
-          <div style="height: 5%"></div>
+          <div class="divider_5"></div>
           <div>
             <input type="radio" id="reg" name="mode" value="regular" checked="checked">
             <label for="reg">Regular</label>
@@ -50,7 +50,7 @@
           </div>
         </div>
         <div id="create">
-          <button onClick="create();">Create New Game</button>
+          <button id="create_button">Create New Game</button>
         </div>
       </div>
       <div id="container">
@@ -61,7 +61,7 @@
             <div id="mines3" class="digit"></div>
             <div id="mines4" class="digit"></div>
           </div>
-          <div id="restart" onClick="create();">
+          <div id="restart">
     
           </div>
           <div class="digits">
@@ -74,6 +74,22 @@
         <div id="game">
         </div>
       </div>
+    </div>
+    <b>Top Scores (16 x 30):</b>
+    <ol id="score_list">
+    </ol>
+
+    <div id="modal">
+      <div id="modal_stuff">
+        <div id="modal_text">
+        </div>
+        <div id="modal_rules">
+          (Only alphanumeric and "_", "-" allowed)
+        </div>
+        <input id="modal_input">
+        <button id="modal_button">Submit</button>
+      </div>
+
     </div>
   </body>
 </html>

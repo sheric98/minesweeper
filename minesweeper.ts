@@ -444,6 +444,8 @@ class WebGame {
     currRequest: null | RequestMessage;
     requestIdxs: Set<TileIdx>;
     requestIdxsType: null | RequestMessage;
+    scores: Scores;
+    usedHelp: boolean;
 
     static requestToClassName: Map<RequestMessage, String> = new Map([
         ["safes", "prob_safe"],
@@ -453,6 +455,7 @@ class WebGame {
 
     constructor(
         doc: Document,
+        scores: Scores,
     ) {
         this.doc = doc;
         this.width = BigInt((<HTMLInputElement>doc.getElementById('width')!).value);
@@ -493,6 +496,9 @@ class WebGame {
         this.currRequest = null;
         this.requestIdxs = new Set();
         this.requestIdxsType = null;
+
+        this.scores = scores;
+        this.usedHelp = false;
 
         this.initGameSpace();
     }
@@ -683,9 +689,14 @@ class WebGame {
 
     checkWin() {
         if (this.game !== null && this.game.gameState === 1) {
+            let endTime = Date.now();
+            let timeTaken = (endTime - this.startingTime) / 1000;
             this.stopTimer();
             this.updateDigs(this.remainingMines, 0, this.minesDigs);
             this.revealWin();
+            if (this.validTopScoreWin()) {
+                this.scores.checkWinTopScore(timeTaken);
+            }
         }
     }
 
@@ -1055,6 +1066,8 @@ class WebGame {
 
     makeRequest(request: RequestMessage) {
         if (this.game !== null) {
+            this.usedHelp = true;
+
             this.currRequest = request;
             this.game.probModel.postRequest(request);
             this.removeRequestSquares();
@@ -1071,13 +1084,33 @@ class WebGame {
             this.requestIdxsType = type;
         }
     }
+
+    // check if this counts as a "top score" win
+    validTopScoreWin(): boolean {
+        return !this.usedHelp && this.height == 16n && this.width == 30n && this.mines == 99n;
+    }
 }
 
 // Direct interaction
 
 var webGame: null | WebGame = null;
+var SCORES: Scores;
+var MODAL: Modal;
 window.onload = () => {
-    webGame = new WebGame(document);
+    MODAL = new Modal();
+
+    // add button onclicks
+    document.getElementById('reveal_safes_button')!.onclick = getSafes;
+    document.getElementById('reveal_flags_button')!.onclick = getFlags;
+    document.getElementById('reveal_lowest_button')!.onclick = getLowest;
+    document.getElementById('create_button')!.onclick = create;
+    document.getElementById('restart')!.onclick = create;
+
+    // load scores
+    SCORES = new Scores(MODAL);
+    SCORES.loadScores();
+
+    webGame = new WebGame(document, SCORES);
     webGame.genBoard();
 };
 
@@ -1085,7 +1118,7 @@ function create() {
     if (webGame !== null) {
         webGame.deleteBoard();
     }
-    webGame = new WebGame(document);
+    webGame = new WebGame(document, SCORES);
     webGame.genBoard();
 }
 
@@ -1689,5 +1722,175 @@ class ProbModelWorker {
 
     postRequest(request: RequestMessage) {
         this.postMessage({request: request});
+    }
+}
+
+// Get high scores
+interface ScoreObj {
+    name: String;
+    time: number;
+}
+
+function generateUUID(): String { // Public Domain/MIT
+    var d = new Date().getTime();//Timestamp
+    var d2 = ((typeof performance !== 'undefined') && performance.now && (performance.now()*1000)) || 0;//Time in microseconds since page-load or 0 if unsupported
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16;//random number between 0 and 16
+        if(d > 0){//Use timestamp until depleted
+            r = (d + r)%16 | 0;
+            d = Math.floor(d/16);
+        } else {//Use microseconds since page-load if supported
+            r = (d2 + r)%16 | 0;
+            d2 = Math.floor(d2/16);
+        }
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
+class Scores {
+    listEl: HTMLElement;
+    scoreObjs: ScoreObj[];
+    modal: Modal;
+
+    constructor(modal: Modal) {
+        this.listEl = document.getElementById("score_list")!;
+        this.scoreObjs = Scores.getScores();
+        this.modal = modal;
+    }
+
+    static MAX_SCORES = 10;
+
+    loadScore(score: ScoreObj, idx: number) {
+        let node = document.createElement("li");
+        let div1 = document.createElement("div");
+        let div2 = document.createElement("div");
+        let text1 = (idx + 1).toString() + ". " + score.name;
+        let text2 = Math.floor(score.time).toString();
+        div1.innerText = text1;
+        div2.innerText = text2;
+        node.appendChild(div1);
+        node.appendChild(div2);
+        this.listEl.appendChild(node);
+    }
+
+    loadScores() {
+        this.scoreObjs.forEach((score, idx) => this.loadScore(score, idx));
+    }
+
+    getTimeToBeat(): null | number {
+        if (this.scoreObjs.length < Scores.MAX_SCORES) {
+            return null;
+        }
+        else {
+            return this.scoreObjs[Scores.MAX_SCORES - 1].time;
+        }
+    }
+    
+    static getScores(): ScoreObj[] {
+        let request = new XMLHttpRequest();
+        request.open('GET', 'scores.json', false);
+        request.send(null);
+        let jsonObj = JSON.parse(request.responseText);
+        return jsonObj;
+    }
+
+    checkWinTopScore(timeTaken: number) {
+        let timeToBeat = this.getTimeToBeat();
+        if (timeToBeat === null || timeTaken < timeToBeat) {
+            this.modal.show(timeTaken, this);
+        }
+    }
+
+    removeScores() {
+        while (this.listEl.firstChild !== null) {
+            this.listEl.removeChild(this.listEl.lastChild!);
+        }
+    }
+
+    updateScores(jsonResponse: ScoreObj[]) {
+        this.removeScores();
+        this.scoreObjs = jsonResponse;
+        this.loadScores();
+    }
+
+    getUpdateId(): String {
+        let dateString = Date.now().toString();
+        let uuid = generateUUID();
+        return dateString + "_" + uuid;
+    }
+
+    submitScore(name: String, time: number) {
+        let url = 'updates/' + this.getUpdateId() + '.json';
+        let newScoreObj: ScoreObj = {"name": name, "time": time};
+        fetch(url, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-amz-acl': 'bucket-owner-full-control',
+            },
+            body: JSON.stringify(newScoreObj),
+        })
+        .catch(e => console.log('Error', e));
+    }
+}
+
+// Modal
+
+class Modal {
+    modal: HTMLElement;
+    button: HTMLElement;
+    text: HTMLElement;
+    input: HTMLInputElement;
+    timeTaken: null | number;
+    scores: null | Scores;
+    
+    static REG = /[a-zA-Z0-9-_]/g;
+
+    constructor() {
+        this.modal = document.getElementById("modal")!;
+        this.button = document.getElementById("modal_button")!;
+        this.text = document.getElementById("modal_text")!;
+        this.input = <HTMLInputElement>document.getElementById("modal_input")!;
+        this.input.value = "";
+        this.timeTaken = null;
+        this.scores = null;
+        this.button.onclick = this.submit.bind(this);
+    }
+
+    show(time: number, scores: Scores) {
+        let scoreString = Math.floor(time).toString();
+        let modalText = "High Score of " + scoreString + "! Enter your name:";
+        this.text.innerText = modalText;
+        this.input.value = "";
+        this.modal.style.display = "block";
+        this.timeTaken = time;
+        this.scores = scores;
+    }
+
+    hide() {
+        this.modal.style.display = "none";
+    }
+
+    sanitizeInput(input: String): null | String {
+        let shortened = input.substring(0, 15);
+        let sanitized = shortened.match(Modal.REG);
+        if (sanitized === null) {
+            return null;
+        }
+        else {
+            return sanitized.join('');
+        }
+    }
+
+    submit() {
+        let sanitizedInput = this.sanitizeInput(this.input.value);
+        if (sanitizedInput != null) {
+            if (this.timeTaken !== null && this.scores !== null) {
+                this.scores.submitScore(sanitizedInput, this.timeTaken);
+            }
+            this.hide();
+            this.timeTaken = null;
+            this.scores = null;
+        }
     }
 }

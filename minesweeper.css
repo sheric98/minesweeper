@@ -202,3 +202,62 @@ body {
 .prob_lowest {
     background-color: cyan;
 }
+
+.divider_5 {
+    height: 5%;
+}
+
+.divider_10 {
+    height: 10%;
+}
+
+ol {
+    width: 15vw;
+}
+
+li {
+    display: flex;
+    justify-content: space-between;
+}
+
+/* The Modal (background) */
+#modal {
+    display: none; /* Hidden by default */
+    position: fixed; /* Stay in place */
+    z-index: 1; /* Sit on top */
+    background-color: rgba(0, 0, 0, 0.2); /* Black w/ opacity */
+    width: 100%; /* Full width */
+    height: 100%; /* Full height */
+    left: 0;
+    top: 0;
+    padding-top: 35vh;
+}
+  
+/* Modal Content */
+#modal_stuff {
+    background-color: white;
+    top: 100%;
+    height: 30vh;
+    width: 30vw;
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-evenly;
+}
+
+#modal_input {
+    width: 70%;
+}
+
+#modal_rules {
+    height: 22%
+}
+
+#modal_text {
+    height: 22%;
+}
+
+#modal_button {
+    width: 30%;
+}
